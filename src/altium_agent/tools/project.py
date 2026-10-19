@@ -1,0 +1,2204 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 George Saliba <george.saliba@salitronic.com>
+# Modified for Altium Agent (2026): see docs/PROVENANCE.md
+"""Project management tools for Altium Designer MCP Server."""
+
+from typing import Any, Optional
+from ..bridge import get_bridge
+from .option_hints import project_option_collision
+from .datasheet_hints import tag_response
+from .bulk_hints import BulkHintTracker
+
+
+def register_project_tools(mcp):
+    """Register project tools with the MCP server."""
+
+    @mcp.tool()
+    async def proj_create(
+        project_path: str,
+        project_type: str = "PCB",
+    ) -> dict[str, Any]:
+        """Create a new Altium project.
+
+        Args:
+            project_path: Full path for the new project file (.PrjPcb, .PrjLib, etc.)
+            project_type: Type of project to create:
+                - "PCB": PCB project (.PrjPcb)
+                - "IntegratedLibrary": Integrated library project
+                - "ScriptProject": Script project
+
+        Returns:
+            Dictionary with created project information
+        """
+        # Ensure the parent directory exists. The Altium side writes the
+        # project stub with Rewrite(), which throws EInOutError ("Invalid
+        # file name") into a blocking IDE modal when the folder is missing.
+        # Creating it here (the server runs on the same host as Altium)
+        # keeps that modal from ever firing.
+        import os
+        parent = os.path.dirname(project_path)
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError:
+                pass
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.create",
+            {"project_path": project_path, "project_type": project_type},
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_open(project_path: str) -> dict[str, Any]:
+        """Open an existing Altium project.
+
+        Args:
+            project_path: Full path to the project file
+
+        Returns:
+            Dictionary with opened project information
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.open", {"project_path": project_path}
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_save(project_path: Optional[str] = None) -> dict[str, Any]:
+        """Save the current or specified project.
+
+        Args:
+            project_path: Optional path to specific project. If None, saves active project.
+
+        Returns:
+            Dictionary confirming save operation
+        """
+        bridge = get_bridge()
+        params = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.save", params)
+        return result
+
+    @mcp.tool()
+    async def proj_close(
+        project_path: Optional[str] = None, save: bool = True
+    ) -> dict[str, Any]:
+        """Close a project, saving its documents (default) or discarding
+        their unsaved edits (save=False).
+
+        Altium closes the FOCUSED project, so this focuses the named one
+        first and refuses if it cannot; if any other project closes, it
+        stops and reports it as ``closed_instead``. Without saving, it
+        clears each member's modified flag so no save prompt appears; if
+        one appears anyway it answers "Save None" then "OK" (untested
+        live), but only when every listed document belongs to this
+        project, else it presses nothing. A document shared with another
+        open project loses its edits too. A prompt left open blocks the
+        bridge: answer it with app_press_dialog_button.
+
+        Args:
+            project_path: Project to close; omit for the focused one (a
+                save=False prompt is then left for a human).
+            save: Write modified documents first (True) or discard (False).
+
+        Returns:
+            ``success``, ``closed`` (checked by looking again),
+            ``project_path``; ``prompts_answered`` and ``discarded`` when a
+            prompt was answered, ``prompt`` and ``reason`` when one was
+            left; otherwise ``discarded`` (members closed unsaved, not
+            proof of edits) and ``attempts``.
+        """
+        import asyncio as _asyncio
+
+        bridge = get_bridge()
+        params = {"save": save}
+        if project_path:
+            params["project_path"] = project_path
+        members = None
+        if not save and project_path:
+            members = await _close_members(bridge, project_path)
+        try:
+            result = await bridge.send_command_async("project.close", params)
+        except Exception as exc:                    # noqa: BLE001
+            prompt = _close_prompt_in(exc)
+            if prompt is None or save:
+                raise
+            left = {"success": False, "closed": False,
+                    "project_path": project_path, "prompt": prompt["title"],
+                    "prompts_answered": 0, "discarded": []}
+            if members is None:
+                left["reason"] = (
+                    "Altium is asking whether to save, and this does not know "
+                    "which documents belong to the project: either no "
+                    "project_path was given, or the deployed script reports "
+                    "member file names rather than paths. Nothing was pressed, "
+                    "and the bridge is blocked until the prompt is answered")
+                return left
+
+            loop = _asyncio.get_running_loop()
+            answered, discarded, refusal = await loop.run_in_executor(
+                None, _answer_close_prompts, bridge, members, prompt)
+
+            closed = False
+            if refusal is None:
+                try:
+                    listing = await bridge.send_command_async(
+                        "project.get_open_projects", {})
+                    open_paths = {
+                        str(p.get("project_path", "")).upper()
+                        for p in (listing or {}).get("projects", [])}
+                    closed = str(project_path).upper() not in open_paths
+                except Exception:                   # noqa: BLE001
+                    closed = False
+            out = {"success": closed, "closed": closed,
+                   "project_path": project_path, "saved": False,
+                   "prompts_answered": answered,
+                   "discarded": sorted(set(discarded))}
+            if refusal is not None:
+                out["prompt"] = prompt["title"]
+                out["reason"] = refusal
+            elif not closed:
+                out["reason"] = (
+                    "the save prompt was answered and the project is still "
+                    "open. Reported on a managed project, where calling "
+                    "proj_close again closed it")
+            return out
+        else:
+            return _dedupe_discarded(result)
+
+    # Helpers for proj_close.
+
+    def _dedupe_discarded(reply):
+        """One entry per path in ``discarded``, first occurrence kept.
+
+        MEASURED: a two-attempt close listed the project file twice,
+        because the handler clears again on the second attempt and appends
+        what it cleared.
+        """
+        if isinstance(reply, dict) and isinstance(reply.get("discarded"), list):
+            seen: set = set()
+            unique = []
+            for path in reply["discarded"]:
+                key = str(path).upper()
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(path)
+            reply = {**reply, "discarded": unique}
+        return reply
+
+    # The helpers here are defined after proj_close in this scope, which is
+    # fine: the tool looks them up when it is CALLED, after registration
+    # finishes.
+
+    #: Titles of Altium's close-time save prompt, before and after "Save
+    #: None" is pressed. MEASURED 2026-09-13 on AD 26.10.1.6.
+    _CLOSE_PROMPT_TITLES = ("Confirm Save", "Confirm Not Saving")
+
+    def _is_absolute(path: str) -> bool:
+        return len(path) > 2 and (path[1] == ":" or path.startswith("\\\\"))
+
+    async def _close_members(bridge, project_path):
+        """Upper-cased absolute paths a close of this project may discard.
+
+        Its members and the project file. None when membership cannot be
+        established, which disables answering any prompt: a file NAME
+        cannot tell two projects' documents apart.
+        """
+        try:
+            docs = await bridge.send_command_async(
+                "project.get_documents", {"project_path": project_path})
+        except Exception:                           # noqa: BLE001
+            return None
+        if isinstance(docs, dict):
+            docs = docs.get("documents", [])
+        if not isinstance(docs, list):
+            return None
+        paths = {str(project_path).upper()}
+        for doc in docs:
+            path = str(doc.get("file_path", "")) if isinstance(doc, dict) else ""
+            if not _is_absolute(path):
+                return None
+            paths.add(path.upper())
+        return paths
+
+    def _close_prompt_in(exc):
+        """The close-time save prompt a blocked-bridge error names, or None."""
+        report = (getattr(exc, "details", None) or {}).get("dialogs") or {}
+        if not isinstance(report, dict):
+            return None
+        for dialog in report.get("dialogs", []):
+            title = str(dialog.get("title", ""))
+            if title.startswith(_CLOSE_PROMPT_TITLES):
+                return {"title": title, "hwnd": dialog.get("hwnd")}
+        return None
+
+    def _answer_close_prompts(bridge, members, prompt, budget=30.0):
+        """Answer the save prompt: Save None, then OK. Runs in a thread.
+
+        Returns (answered, discarded, refusal). Presses nothing unless
+        every document the prompt lists is in ``members``. Loops because
+        a close retried by the handler can raise a second prompt.
+        """
+        import time as _time
+        from ..ui import uia, windows
+
+        if not (windows.available() and uia.available()):
+            return 0, [], ("UI Automation is not available here, so the "
+                           "prompt was left open")
+        if not windows.automation_enabled():
+            return 0, [], (f"UI automation is disabled by "
+                           f"{windows.UI_AUTOMATION_ENV}, so the prompt was "
+                           f"left open")
+        status = bridge.get_altium_status()
+        pid = status.get("pid")
+        if not pid:
+            return 0, [], (status.get("reason") or "no Altium process to "
+                           "answer the prompt in, so it was left open")
+
+        answered, discarded = 0, []
+        hwnd = prompt.get("hwnd")
+        deadline = _time.monotonic() + budget
+        while hwnd and _time.monotonic() < deadline:
+            read = uia.describe_window(hwnd, depth=6, limit=400)
+            listed = sorted({e.get("name", "") for e in read.get("elements", [])
+                             if _is_absolute(e.get("name", ""))})
+            if not listed:
+                return answered, discarded, (
+                    "could not read which documents the prompt would discard, "
+                    "so nothing was pressed")
+            foreign = [p for p in listed if p.upper() not in members]
+            if foreign:
+                return answered, discarded, (
+                    "the prompt would also discard documents outside this "
+                    "project, so nothing was pressed: " + "; ".join(foreign))
+            if not uia.invoke(hwnd, "Save None").get("ok"):
+                return answered, discarded, (
+                    "Save None could not be pressed, so OK was not pressed "
+                    "either")
+            # OK with the decisions still on Save would SAVE. The retitle
+            # is the only visible sign the decisions changed.
+            if not windows.wait_until(
+                    lambda: windows.window_title(hwnd).startswith(
+                        "Confirm Not Saving"), 5.0):
+                return answered, discarded, (
+                    "Save None did not change the decisions within 5 s, so OK "
+                    "was not pressed: pressed now it would save")
+            if not uia.invoke(hwnd, "OK").get("ok"):
+                return answered, discarded, "OK could not be pressed"
+            windows.wait_for_close(hwnd, timeout=10.0)
+            answered += 1
+            discarded.extend(listed)
+
+            found = {"hwnd": None}
+
+            def another() -> bool:
+                for dialog in windows.dialogs(pid):
+                    if (dialog.hwnd != hwnd and (dialog.title or "")
+                            .startswith(_CLOSE_PROMPT_TITLES)):
+                        found["hwnd"] = dialog.hwnd
+                        return True
+                return False
+
+            windows.wait_until(another, 3.0)
+            hwnd = found["hwnd"]
+        return answered, discarded, None
+
+    @mcp.tool()
+    async def proj_list_documents(
+        project_path: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """List all documents in a project.
+
+        Args:
+            project_path: Optional path to specific project. If None, uses active project.
+
+        Returns:
+            List of document information dictionaries containing:
+            - file_name: Document file name
+            - file_path: Full file path
+            - document_kind: Type of document
+        """
+        bridge = get_bridge()
+        params = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.get_documents", params)
+        return result
+
+    @mcp.tool()
+    async def proj_add_document(
+        document_path: str, project_path: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Add an existing document to a project.
+
+        Args:
+            document_path: Full path to the document to add
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary confirming the operation
+        """
+        bridge = get_bridge()
+        params = {"document_path": document_path}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.add_document", params)
+        return result
+
+    @mcp.tool()
+    async def proj_remove_document(
+        document_path: str, project_path: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Remove a document from a project.
+
+        Note: This only removes the document from the project, it doesn't delete the file.
+
+        Args:
+            document_path: Full path to the document to remove
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary confirming the operation
+        """
+        bridge = get_bridge()
+        params = {"document_path": document_path}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.remove_document", params)
+        return result
+
+    @mcp.tool()
+    async def proj_get_parameters(
+        project_path: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Get all parameters defined at the project level.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            List of parameter dictionaries with name and value
+        """
+        bridge = get_bridge()
+        params = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.get_parameters", params)
+        return result
+
+    @mcp.tool()
+    async def proj_set_parameter(
+        name: str, value: str, project_path: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Set a project-level parameter.
+
+        Args:
+            name: Parameter name
+            value: Parameter value
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary confirming the operation
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"name": name, "value": value}
+        if project_path:
+            params["project_path"] = project_path
+
+        result = await bridge.send_command_async("project.set_parameter", params)
+        # A PROJECT PARAMETER IS NOT A PROJECT OPTION, and the names
+        # collide. Asking for hierarchy_mode here creates a user
+        # parameter of that name and verifies it, correctly, while the
+        # actual setting is untouched. Nothing said so, and the reply
+        # looked like a success because it was one, of a different thing.
+        hint = project_option_collision(name)
+        if hint and isinstance(result, dict):
+            result["_hint_not_a_project_option"] = hint
+        return result
+
+    @mcp.tool()
+    async def proj_push_parameters() -> dict[str, Any]:
+        """Copy all project-level parameters onto each loaded schematic sheet.
+
+        Every project parameter is written as a document (sheet) parameter on
+        each LOADED schematic in the focused project, so title blocks can
+        reference project-wide values. Unloaded sheets are skipped -- call
+        ``proj_load_sheets`` first to include every sheet.
+
+        Returns:
+            Dict with param_count, sheets_updated, sheets_skipped_not_loaded,
+            and params_pushed.
+        """
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "project.push_params_to_sheets", {}
+        )
+
+    @mcp.tool()
+    async def proj_get_nets(
+        component: str = "",
+        net_name: str = "",
+        project_path: Optional[str] = None,
+        limit: int = 500,
+        force_recompile: bool = False,
+    ) -> dict[str, Any]:
+        """Get net-to-pin connectivity from the compiled project netlist.
+
+        For more than one component or net, do NOT loop: call once with
+        no filters (raise ``limit``) and slice locally. Each call
+        compiles the project, about 700 ms.
+
+        Args:
+            component: Filter by component designator. Empty = all.
+            net_name: Filter by net name. Empty = all.
+            project_path: Optional project path. If None, uses active.
+            limit: Max pin records (default 500). Raise for big boards.
+            force_recompile: Save dirty docs and recompile from scratch
+                (5-10 s more), for a netlist that is surely fresh, e.g.
+                after the user edited sheets. ``proj_get_compile_freshness``
+                tells whether any doc is dirty.
+
+        Returns:
+            Dict with "pins", "count", "limit", "limit_hit" (true when
+            the list stopped at ``limit`` with pins left over) and
+            "skipped_nil" (entries Altium returned empty).
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"limit": str(limit)}
+        if component:
+            params["component"] = component
+        if net_name:
+            params["net_name"] = net_name
+        if project_path:
+            params["project_path"] = project_path
+        if force_recompile:
+            # Project.pas ForceRecompileIfRequested reads
+            # "force_recompile". Sent under the tool's own name this
+            # matched nothing, so the flag was dead and a caller who
+            # asked for fresh data got the cached compile instead.
+            params["force_recompile"] = "true"
+        result = await bridge.send_command_async("project.get_nets", params)
+        hint = BulkHintTracker.record_and_hint("proj_get_nets")
+        if hint and isinstance(result, dict):
+            result["_hint_bulk"] = hint
+        return result
+
+    @mcp.tool()
+    async def proj_export_netlist(
+        output_path: Optional[str] = None,
+        net_format: str = "pads",
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Write the compiled connectivity to a flat netlist file.
+
+        Pulls the full pin-net table once (the same data as get_nets) and
+        writes it as a standalone netlist that other tools can import. Two
+        formats:
+
+        - "pads": PADS-PCB ASCII, *NET* section with one *SIGNAL* block per
+          net listing its component.pin nodes. Widely importable.
+        - "tabular": one "component,pin,pin_name,net" CSV row per node, for
+          quick diffing or spreadsheet review.
+
+        Single-pin and unnamed nets are included so the file is a faithful
+        dump, not a routed-only view.
+
+        Args:
+            output_path: Destination file. Defaults to
+                workspace/netlist.<ext> if omitted.
+            net_format: "pads" (default) or "tabular".
+            project_path: Optional project path; uses active if omitted.
+
+        Returns:
+            Dictionary with output_path, net_format, net_count, node_count.
+        """
+        from pathlib import Path
+        from ..config import get_config
+
+        fmt = (net_format or "pads").strip().lower()
+        if fmt not in ("pads", "tabular"):
+            return {"success": False, "error": f"unknown net_format '{net_format}' (use 'pads' or 'tabular')"}
+
+        bridge = get_bridge()
+        params: dict[str, Any] = {"limit": "100000"}
+        if project_path:
+            params["project_path"] = project_path
+        data = await bridge.send_command_async("project.get_nets", params)
+        pins = data.get("pins", []) if isinstance(data, dict) else []
+
+        nodes: list[tuple[str, str, str, str]] = []
+        for p in pins:
+            comp = str(p.get("component", "")).strip()
+            pin = str(p.get("pin", "")).strip()
+            pin_name = str(p.get("pin_name", "")).strip()
+            net = str(p.get("net", "")).strip()
+            if not comp or not pin or not net:
+                continue
+            nodes.append((comp, pin, pin_name, net))
+
+        by_net: dict[str, list[tuple[str, str, str, str]]] = {}
+        for n in nodes:
+            by_net.setdefault(n[3], []).append(n)
+
+        if fmt == "pads":
+            lines = ["*PADS-PCB*", "*NET*"]
+            for net in sorted(by_net):
+                lines.append(f"*SIGNAL* {net}")
+                row = "".join(f"{c}.{p} " for c, p, _pn, _net in sorted(by_net[net])).rstrip()
+                lines.append(row)
+            lines.append("*END*")
+            text = "\r\n".join(lines) + "\r\n"
+            default_name = "netlist.net"
+        else:
+            lines = ["component,pin,pin_name,net"]
+            for comp, pin, pin_name, net in sorted(nodes):
+                lines.append(f"{comp},{pin},{pin_name},{net}")
+            text = "\n".join(lines) + "\n"
+            default_name = "netlist.csv"
+
+        if output_path:
+            out = Path(output_path)
+        else:
+            out = get_config().workspace_dir / default_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+
+        return {
+            "success": True,
+            "output_path": str(out),
+            "net_format": fmt,
+            "net_count": len(by_net),
+            "node_count": len(nodes),
+        }
+
+    @mcp.tool()
+    async def proj_compile(project_path: Optional[str] = None) -> dict[str, Any]:
+        """Compile a project to check for errors.
+
+        This runs the project compilation which validates connectivity
+        and checks for design errors.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with compilation results including any errors/warnings
+        """
+        bridge = get_bridge()
+        params = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.compile", params)
+        return result
+
+    @mcp.tool()
+    async def proj_load_sheets(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Load every schematic sheet of a project into the Altium editor.
+
+        Project-scope operations (query_objects, batch_modify, etc. with
+        scope="project") only iterate sheets already resident in SchServer.
+        A sheet listed as a project member via get_open_documents may still
+        show loaded=false, meaning Altium hasn't opened its editor state.
+        Call this tool first to force every sheet to load as a proper
+        project member (no free documents).
+
+        This is a no-op for sheets already loaded. Safe to call repeatedly.
+
+        Args:
+            project_path: Optional project path. If None, uses focused project.
+
+        Returns:
+            Dictionary with:
+            - total_sheets: Total SCH sheets in the project
+            - loaded: Sheets newly loaded by this call
+            - already_loaded: Sheets that were already resident
+            - failed: Sheets that could not be opened
+        """
+        bridge = get_bridge()
+        params = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.load_project_sheets", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_get_bom(
+        project_path: Optional[str] = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
+        """Export a full BOM from the compiled project.
+
+        DATASHEET DISCIPLINE: The BOM is the canonical list of
+        manufacturer part numbers in this design. The response carries
+        `_datasheet_guidance` with per-part search queries. Before
+        drawing any conclusion about a listed part, fetch and read
+        its datasheet (WebSearch + WebFetch if not already at hand).
+        Library metadata here is NOT authoritative.
+
+        Returns every component with designator, comment/value, footprint,
+        library reference, and all pin-net connections.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+            limit: Max components to return (default 1000).
+
+        Returns:
+            Dictionary with "components" array and "count", "limit",
+            "limit_hit" (true when the list stopped at ``limit`` with
+            components left over), "skipped_nil", plus
+            `_datasheet_guidance` + `_datasheet_parts`.
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"limit": str(limit)}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.get_bom", params)
+        return tag_response(result, bom=result, context="proj_get_bom")
+
+    @mcp.tool()
+    async def proj_get_component_info(
+        designator: str,
+        project_path: Optional[str] = None,
+        with_pin_nets: bool = True,
+        with_parameters: bool = True,
+        timeout: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Get full information about one placed component.
+
+        IMPORTANT: for more than one, use proj_get_component_info_many.
+        Pin nets need a project compile (30-60 s on a large project);
+        with_pin_nets=False answers in under a second.
+
+        DATASHEET DISCIPLINE: parameters and comment are not
+        authoritative; fetch the datasheet before stating pin functions
+        or ratings.
+
+        Args:
+            designator: e.g. "U1".
+            project_path: Project (default: the active one).
+            with_pin_nets: Compile and give each pin's net (default True).
+            with_parameters: Include parameters (default True).
+            timeout: Poll timeout in seconds (raise to ~90 with pin nets
+                on large projects).
+
+        Returns:
+            designator, comment, footprint, lib_ref, sheet, ``pins``
+            [{pin, name, net?}], ``parameters`` when asked, and
+            ``_datasheet_guidance``.
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"designator": designator}
+        if project_path:
+            params["project_path"] = project_path
+        if not with_pin_nets:
+            params["with_pin_nets"] = "false"
+        if not with_parameters:
+            params["with_parameters"] = "false"
+        result = await bridge.send_command_async(
+            "project.get_component_info", params, timeout=timeout,
+        )
+        hint = BulkHintTracker.record_and_hint("proj_get_component_info")
+        if hint and isinstance(result, dict):
+            result["_hint_bulk"] = hint
+        if isinstance(result, dict):
+            mfr = str(
+                result.get("parameters", {}).get("Manufacturer")
+                or result.get("parameters", {}).get("manufacturer")
+                or ""
+            )
+            part = str(
+                result.get("parameters", {}).get("Manufacturer Part Number")
+                or result.get("parameters", {}).get("ManufacturerPartNumber")
+                or result.get("parameters", {}).get("PartNumber")
+                or result.get("comment")
+                or ""
+            ).strip()
+            parts = [{
+                "manufacturer": mfr,
+                "part_number": part,
+                "designators": str(result.get("designator", "")),
+            }] if part else []
+            return tag_response(
+                result,
+                explicit_parts=parts,
+                context="proj_get_component_info",
+            )
+        return result
+
+    @mcp.tool()
+    async def proj_get_component_info_many(
+        designators: list[str],
+        project_path: Optional[str] = None,
+        with_pin_nets: bool = True,
+        with_parameters: bool = True,
+        timeout: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Full per-component info for MANY designators in ONE round-trip.
+
+        PREFER THIS over looping `proj_get_component_info`: one compile
+        for the batch. ``with_pin_nets=False`` skips the compile for a
+        sub-second metadata read.
+
+        Parameters and library metadata are not authoritative: read the
+        manufacturer datasheet before reasoning about pin functions,
+        ratings or behaviour (see `_datasheet_guidance`).
+
+        Args:
+            designators: List of component designators.
+            project_path: Optional project path. If None, uses active.
+            with_pin_nets: When True (default) compile once and emit
+                the flattened net for each pin on every component.
+                Set False to skip the compile.
+            with_parameters: When True (default) include each
+                component's parameter dict.
+            timeout: Optional bridge poll-timeout override (seconds).
+                Raise this when keeping `with_pin_nets=True` on large
+                hierarchical projects.
+
+        Returns:
+            Dict with components[], matched, requested, not_found[],
+            plus `_datasheet_guidance` + `_datasheet_parts`.
+        """
+        bridge = get_bridge()
+        cleaned = [str(d).strip() for d in (designators or []) if str(d).strip()]
+        if not cleaned:
+            return {"error": "No designators provided", "matched": 0}
+        params: dict[str, Any] = {"designators": "~~".join(cleaned)}
+        if project_path:
+            params["project_path"] = project_path
+        if not with_pin_nets:
+            params["with_pin_nets"] = "false"
+        if not with_parameters:
+            params["with_parameters"] = "false"
+        result = await bridge.send_command_async(
+            "project.get_component_info_batch", params, timeout=timeout,
+        )
+        if isinstance(result, dict):
+            comps = result.get("components") or []
+            explicit = []
+            seen_keys: set[tuple[str, str]] = set()
+            for c in comps:
+                if not isinstance(c, dict):
+                    continue
+                desig = str(c.get("designator") or "").strip()
+                params_dict = c.get("parameters") or {}
+                mfr = ""
+                pn = ""
+                if isinstance(params_dict, dict):
+                    mfr = str(
+                        params_dict.get("Manufacturer")
+                        or params_dict.get("manufacturer")
+                        or ""
+                    )
+                    pn = str(
+                        params_dict.get("Manufacturer Part Number")
+                        or params_dict.get("ManufacturerPartNumber")
+                        or params_dict.get("PartNumber")
+                        or ""
+                    ).strip()
+                if not pn:
+                    pn = str(c.get("comment") or "").strip()
+                if not pn:
+                    continue
+                key = (pn.lower(), desig.lower())
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                explicit.append({
+                    "manufacturer": mfr,
+                    "part_number": pn,
+                    "designators": desig,
+                })
+            return tag_response(
+                result,
+                explicit_parts=explicit,
+                context="proj_get_component_info_many",
+            )
+        return result
+
+    @mcp.tool()
+    async def proj_export_pdf(output_path: str) -> dict[str, Any]:
+        """Export the active document to PDF.
+
+        Args:
+            output_path: Full path for the output PDF file
+
+        Returns:
+            Dictionary confirming export
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.export_pdf", {"output_path": output_path}
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_cross_probe(
+        designator: str,
+        target: str = "schematic",
+    ) -> dict[str, Any]:
+        """Jump to and highlight a component in the schematic or PCB.
+
+        Args:
+            designator: Component designator to find (e.g., "U1", "R8")
+            target: "schematic" or "pcb"
+
+        Returns:
+            Dictionary confirming the operation
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.cross_probe",
+            {"designator": designator, "target": target},
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_get_stats(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get design statistics from the compiled project.
+
+        Returns counts of sheets, components, pins, and nets.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with sheets, components, pins, nets counts
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.get_design_stats", params)
+        return result
+
+    @mcp.tool()
+    async def proj_get_board_info() -> dict[str, Any]:
+        """Get PCB board information, outline vertices, layer stack, origin.
+
+        IT DOES NOT REQUIRE A PCB TO BE ACTIVE, which is what this used
+        to claim. The handler resolves ANY open board, so with a
+        schematic focused it answers about some other document.
+        MEASURED: with a schematic active and a two-document project
+        focused, it returned an outline belonging to neither, and gave
+        no way to tell.
+
+        ``board_path`` in the reply names the document that actually
+        answered. Check it before trusting the geometry, or activate
+        the board you mean first.
+
+        Returns:
+            Dictionary with origin_x, origin_y, board_path, outline
+            (vertex array), and layers (active copper layer names)
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async("project.get_board_info", {})
+        return result
+
+    @mcp.tool()
+    async def proj_annotate(
+        order: str = "down_then_across",
+    ) -> dict[str, Any]:
+        """Annotate schematic designators programmatically, no dialog, no user interaction.
+
+        Numbers every unlocked component on every sheet in the chosen
+        order, per prefix (R1, R2, ... C1, ...), keeping each prefix ("R?"
+        and "R13" both stay R). Locked designators are skipped. Undoable.
+
+        Args:
+            order: Annotation traversal order:
+                   "down_then_across" (default: row-major top-to-bottom, left-to-right)
+                   "up_then_across"   (row-major bottom-to-top, left-to-right)
+                   "across_then_down" (column-major left-to-right, top-to-bottom)
+                   "across_then_up"   (column-major left-to-right, bottom-to-top)
+                   "none"             (reset all designators to "<prefix>?")
+
+        Returns:
+            Dictionary with:
+              - success: True
+              - order: the order that was applied
+              - renamed: count of components renumbered
+              - reset: count reset to "?" (only for order="none")
+              - skipped_locked: count of locked components left untouched
+              - documents_processed: count of schematic sheets visited
+              - programmatic: True (marks this as the non-interactive path)
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.annotate", {"order": order}
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_run_output(
+        output_type: str,
+        output_path: str = "",
+    ) -> dict[str, Any]:
+        """Generate manufacturing output files from the active PCB.
+
+        Note: These may open Altium's export dialogs for configuration.
+
+        Args:
+            output_type: Type of output, "gerber", "drill", "pick_place", "ipc_netlist"
+            output_path: Optional output directory/file path
+
+        Returns:
+            Dictionary confirming generation
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"output_type": output_type}
+        if output_path:
+            params["output_path"] = output_path
+        result = await bridge.send_command_async(
+            "project.generate_output", params, timeout=120.0
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_get_focused() -> dict[str, Any]:
+        """Get information about the currently focused project.
+
+        Returns:
+            Dictionary with project information:
+            - project_name: Name of the project
+            - project_path: Full path to the project file
+            - document_count: Number of documents in the project
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async("project.get_focused")
+        return result
+
+    # ------------------------------------------------------------------
+    # Output generation tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def proj_export_step(output_path: str = "") -> dict[str, Any]:
+        """Export the open PCB to a STEP 3D model file.
+
+        The board is focused first, since the export acts on the focused
+        view. If output_path is omitted, Altium may show a file-save
+        dialog. ``generated`` is true only when a new file is at
+        output_path afterwards; otherwise the reply says the export was
+        dispatched and why nothing could be confirmed. An OutJob with an
+        ExportSTEP output, run through proj_run_outjob, is the route
+        whose result can always be checked.
+
+        Args:
+            output_path: Full path for the output .step file (optional)
+
+        Returns:
+            ``generated``, plus ``dispatched`` and ``reason`` when no new
+            file was found
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if output_path:
+            params["output_path"] = output_path
+        result = await bridge.send_command_async(
+            "project.export_step", params, timeout=120.0
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_export_dxf(output_path: str = "") -> dict[str, Any]:
+        """Export the active PCB to DXF (AutoCAD) format.
+
+        Requires an active PCB document. If output_path is omitted,
+        Altium may show a file-save dialog.
+
+        Args:
+            output_path: Full path for the output .dxf file (optional)
+
+        Returns:
+            Dictionary confirming the export
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if output_path:
+            params["output_path"] = output_path
+        result = await bridge.send_command_async(
+            "project.export_dxf", params, timeout=120.0
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_export_image(
+        output_path: str,
+        format: str = "pdf",
+        width: int = 1920,
+        height: int = 1080,
+    ) -> dict[str, Any]:
+        """Export the active schematic / PCB document, silent (no dialog).
+
+        Only PDF is silent; it prints the focused document, as
+        ``proj_export_pdf`` does, so make the wanted tab active first.
+        png/jpg/bmp return ``IMAGE_FORMAT_UNSUPPORTED``: they need an
+        OutJob with an image container, run by ``proj_run_outjob``.
+        An old file at ``output_path`` is deleted first, and a run that
+        leaves no file is ``EXPORT_FILE_MISSING``.
+
+        Args:
+            output_path: Full path for the output file. The directory must
+                already exist. The extension should be ``.pdf``.
+            format: Output format. Only ``"pdf"`` is silent today
+                (default). ``"png"``, ``"jpg"``, ``"bmp"`` return an
+                explicit ``IMAGE_FORMAT_UNSUPPORTED`` error.
+            width: Kept for API compatibility. Unused by the PDF path.
+            height: Kept for API compatibility. Unused by the PDF path.
+
+        Returns:
+            Dictionary confirming the export with the resolved path,
+            format, width, height, and the scoped schematic. Sets
+            ``file_exists`` based on a Python-side existence check.
+        """
+        import os
+
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.export_image",
+            {
+                "output_path": output_path,
+                "format": format,
+                "width": str(width),
+                "height": str(height),
+            },
+            timeout=120.0,
+        )
+        if isinstance(result, dict) and result.get("success"):
+            exists = os.path.exists(output_path)
+            result["file_exists"] = exists
+            if exists:
+                try:
+                    result["file_size_bytes"] = os.path.getsize(output_path)
+                except OSError:
+                    pass
+            else:
+                # Pascal claimed success but file is missing - downgrade
+                # to an explicit error so callers don't trust a phantom
+                # success.
+                result["success"] = False
+                result["error"] = "EXPORT_FILE_MISSING"
+                result["details"] = (
+                    f"Pascal reported success but {output_path} does not "
+                    f"exist on disk. The synthetic-OutJob silent path may "
+                    f"not be supported on this Altium build."
+                )
+        return result
+
+    @mcp.tool()
+    async def proj_list_outjob_containers(outjob_path: str = "") -> dict[str, Any]:
+        """List all output containers defined in an OutJob file.
+
+        OutJob files define output configurations (Gerber, PDF, BOM, etc.)
+        organized into named containers. Use this to discover what outputs
+        are available before running them with `proj_run_outjob`.
+
+        Args:
+            outjob_path: Path to the .OutJob file. If omitted, uses the
+                         first OutJob found in the focused project.
+
+        Returns:
+            Dictionary with "outjob_path" and "containers" array
+            (each: name, type, group)
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if outjob_path:
+            params["outjob_path"] = outjob_path
+        result = await bridge.send_command_async(
+            "project.get_outjob_containers", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_run_outjob(
+        container_name: str,
+        outjob_path: str = "",
+        fresh_window_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        """Execute a specific output container from an OutJob file.
+
+        First use `proj_list_outjob_containers` to list available
+        containers, then run the desired one by name. Supports both GeneratedFiles
+        (Gerber, drill, BOM, etc.) and Publish (PDF) container types.
+
+        SUCCESS MEANS A FILE WAS WRITTEN under ``output_dir`` after the
+        run started; a container bound to a managed release or with its
+        outputs off runs cleanly and writes nothing. Output written
+        elsewhere reads as ``success: false``, and ``reason`` says what
+        was examined.
+
+        Args:
+            container_name: Name of the output container to execute
+            outjob_path: Path to the .OutJob file. If omitted, uses the
+                         first OutJob found in the focused project.
+            fresh_window_seconds: files modified up to this many seconds
+                before the run started still count as written, for file
+                systems with coarse timestamps. Default 5s.
+
+        Returns:
+            ``success``, ``container_name``, ``container_type``,
+            ``output_dir``, ``output_dir_exists``, ``files_written`` (a
+            count), ``written`` (up to 50 paths), and ``reason`` when
+            nothing was written.
+        """
+        import time as _time
+
+        bridge = get_bridge()
+        params: dict[str, Any] = {"container_name": container_name}
+        if outjob_path:
+            params["outjob_path"] = outjob_path
+        started_at = _time.time()
+        result = await bridge.send_command_async(
+            "project.run_outjob", params, timeout=120.0
+        )
+        return _judge_outjob_run(result, started_at, fresh_window_seconds)
+
+    # Shared by the three OutJob tools, so they cannot disagree about what
+    # "produced" means. Defined after proj_run_outjob in this scope, which
+    # is fine: the tools look these up when they are CALLED, by which time
+    # registration has finished.
+    def _scan_output_dir(output_dir, started_at, fresh_window_seconds):
+        """(exists, files) for one container's output directory.
+
+        ``files`` is every file under it, each flagged ``newly_produced``
+        when its mtime is at or after the run start less the window.
+        """
+        from pathlib import Path
+
+        if not output_dir:
+            return False, []
+        root = Path(output_dir)
+        if not root.is_dir():
+            return False, []
+        cutoff = started_at - float(fresh_window_seconds)
+        files: list[dict[str, Any]] = []
+        for f in root.rglob("*"):
+            try:
+                if not f.is_file():
+                    continue
+                st = f.stat()
+            except OSError:
+                continue
+            files.append({"path": str(f), "size": st.st_size,
+                          "modified_at": st.st_mtime,
+                          "newly_produced": st.st_mtime >= cutoff})
+        return True, files
+
+    def _judge_outjob_run(run, started_at, fresh_window_seconds):
+        """A run reply with ``success`` decided by what was written.
+
+        The handler reports only that the process was issued. Anything
+        that is not a normal reply is passed through untouched.
+        """
+        if not isinstance(run, dict) or run.get("error"):
+            return run
+        out = dict(run)
+        out_dir = run.get("output_dir") or ""
+        exists, files = _scan_output_dir(out_dir, started_at,
+                                         fresh_window_seconds)
+        fresh = [f["path"] for f in files if f["newly_produced"]]
+        out["output_dir_exists"] = exists
+        out["files_written"] = len(fresh)
+        out["written"] = fresh[:50]
+        out["success"] = bool(fresh)
+        if not fresh:
+            if not out_dir:
+                out["reason"] = (
+                    "the container ran, but the OutJob gives it no output "
+                    "path, so there was no folder to check and no file is "
+                    "known to have been written")
+            elif not exists:
+                out["reason"] = (
+                    f"the container ran, but {out_dir} does not exist, so "
+                    f"nothing was written there. A container bound to a "
+                    f"managed release, or with its outputs switched off, "
+                    f"runs cleanly and writes no local file")
+            else:
+                out["reason"] = (
+                    f"the container ran, but no file under {out_dir} was "
+                    f"written or changed after it started. Outputs switched "
+                    f"off in the OutJob, or bound to a managed release, "
+                    f"produce this")
+        return out
+
+    @mcp.tool()
+    async def proj_run_outjob_all(
+        outjob_path: str = "",
+        include_files: bool = True,
+        fresh_window_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        """Run every container in an OutJob and report what each produced.
+
+        Each container runs through ``proj_run_outjob`` in order, and its
+        ``output_dir`` files written since it started are flagged
+        ``newly_produced``.
+
+        Args:
+            outjob_path: Path to the .OutJob. Omit to use the first one
+                in the focused project.
+            include_files: List each container's files (default True).
+            fresh_window_seconds: Files modified up to this long before a
+                container started still count as new. Default 5 s.
+
+        Returns:
+            Dict with ``ok``, ``outjob_path``, ``containers_run``
+            (list of container names), ``results`` (per-container
+            dicts each with ``container``, ``container_type``,
+            ``output_dir``, ``ok``, ``files``).
+        """
+        from pathlib import Path
+        import time as _time
+
+        bridge = get_bridge()
+        list_params: dict[str, Any] = {}
+        if outjob_path:
+            list_params["outjob_path"] = outjob_path
+        listing = await bridge.send_command_async(
+            "project.get_outjob_containers", list_params, timeout=30.0,
+        )
+        if not isinstance(listing, dict):
+            return {"ok": False, "reason": "container listing failed"}
+        containers = listing.get("containers") or []
+        if not containers:
+            return {"ok": True, "containers_run": [], "results": [],
+                    "reason": "no containers in OutJob"}
+
+        per_container: list[dict[str, Any]] = []
+        for c in containers:
+            name = c.get("name") if isinstance(c, dict) else str(c)
+            if not name:
+                continue
+            started_at = _time.time()
+            params: dict[str, Any] = {"container_name": name}
+            if outjob_path:
+                params["outjob_path"] = outjob_path
+            run = await bridge.send_command_async(
+                "project.run_outjob", params, timeout=300.0,
+            )
+            judged = _judge_outjob_run(run, started_at, fresh_window_seconds)
+            judged = judged if isinstance(judged, dict) else {}
+            out_dir = judged.get("output_dir")
+            exists, files = _scan_output_dir(out_dir, started_at,
+                                             fresh_window_seconds)
+            entry: dict[str, Any] = {
+                "container": name,
+                # From what was written, not from the handler, which
+                # reports only that the process was issued.
+                "ok": bool(judged.get("success")),
+                "container_type": judged.get("container_type"),
+                "output_dir": out_dir,
+                "output_dir_exists": exists,
+                "files_written": judged.get("files_written", 0),
+                "files": files if include_files else [],
+            }
+            if not entry["ok"]:
+                entry["reason"] = judged.get("reason", "")
+            per_container.append(entry)
+
+        produced = [r for r in per_container if r["ok"]]
+        return {
+            "ok": bool(produced),
+            "containers_with_output": len(produced),
+            "reason": "" if produced else (
+                "no container wrote a file under its output_dir; each "
+                "result says what was checked"),
+            "outjob_path": (
+                (per_container[0].get("output_dir") if per_container else "")
+                if not outjob_path else outjob_path
+            ),
+            "containers_run": [r["container"] for r in per_container],
+            "results": per_container,
+        }
+
+    @mcp.tool()
+    async def proj_generate_fab_package(
+        outjob_path: str = "",
+        include_step: bool = False,
+        include_dxf: bool = False,
+        fresh_window_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        """Generate a fabrication package from an OutJob (Gerbers, NC drill,
+        IPC-356, pick-and-place, assembly, BOM) and report every file produced.
+
+        Those formats exist only as OutJob containers, so this runs every
+        container in the OutJob and lists the files each wrote; STEP and
+        DXF are optional extra exports. The OutJob's outputs must already
+        be enabled: a script cannot switch them on.
+
+        Args:
+            outjob_path: path to the .OutJob; omit to use the first one in the
+                focused project.
+            include_step: also export a STEP 3D model of the active PCB.
+            include_dxf: also export a DXF of the active PCB.
+            fresh_window_seconds: files modified within this window before a
+                container ran still count as newly produced.
+
+        Returns:
+            {"ok", "outjob_path", "containers_run", "results" (per-container
+             with output_dir + files), "extras" (step/dxf results),
+             "all_files" (flat list of newly-produced file paths)}.
+        """
+        from pathlib import Path
+        import time as _time
+
+        bridge = get_bridge()
+        list_params: dict[str, Any] = {}
+        if outjob_path:
+            list_params["outjob_path"] = outjob_path
+        listing = await bridge.send_command_async(
+            "project.get_outjob_containers", list_params, timeout=30.0,
+        )
+        if not isinstance(listing, dict):
+            return {"ok": False, "reason": "container listing failed"}
+        containers = listing.get("containers") or []
+        if not containers:
+            return {
+                "ok": False,
+                "reason": "no OutJob containers found; create and configure an "
+                "OutJob (Gerber, NC drill, etc.) before generating a fab package",
+            }
+
+        per_container: list[dict[str, Any]] = []
+        all_files: list[str] = []
+        for c in containers:
+            name = c.get("name") if isinstance(c, dict) else str(c)
+            if not name:
+                continue
+            started_at = _time.time()
+            params: dict[str, Any] = {"container_name": name}
+            if outjob_path:
+                params["outjob_path"] = outjob_path
+            run = await bridge.send_command_async(
+                "project.run_outjob", params, timeout=300.0,
+            )
+            judged = _judge_outjob_run(run, started_at, fresh_window_seconds)
+            judged = judged if isinstance(judged, dict) else {}
+            out_dir = judged.get("output_dir")
+            exists, files = _scan_output_dir(out_dir, started_at,
+                                             fresh_window_seconds)
+            all_files.extend(f["path"] for f in files if f["newly_produced"])
+            entry: dict[str, Any] = {
+                "container": name,
+                "container_type": judged.get("container_type"),
+                # From what was written, not from the handler, which
+                # reports only that the process was issued.
+                "ok": bool(judged.get("success")),
+                "output_dir": out_dir,
+                "output_dir_exists": exists,
+                "files_written": judged.get("files_written", 0),
+                "files": files,
+            }
+            if not entry["ok"]:
+                entry["reason"] = judged.get("reason", "")
+            per_container.append(entry)
+
+        extras: dict[str, Any] = {}
+        if include_step:
+            extras["step"] = await bridge.send_command_async(
+                "project.export_step", {}, timeout=120.0
+            )
+        if include_dxf:
+            extras["dxf"] = await bridge.send_command_async(
+                "project.export_dxf", {}, timeout=120.0
+            )
+
+        return {
+            "ok": bool(all_files),
+            "reason": "" if all_files else (
+                "no container wrote a file under its output_dir, so there "
+                "is no fabrication package; each result says what was "
+                "checked"),
+            "outjob_path": outjob_path,
+            "containers_run": [r["container"] for r in per_container],
+            "results": per_container,
+            "extras": extras,
+            "all_files": sorted(set(all_files)),
+        }
+
+    # ------------------------------------------------------------------
+    # Variant management tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def proj_list_variants(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """List all project variants with their component overrides.
+
+        Compiles the project and returns every variant definition including
+        component variation details (Fitted / Not Fitted / Alternate) and
+        any parameter overrides.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with "variants" array and "count". Each variant has
+            name, description, and variations array (designator, kind,
+            alternate_part, parameters).
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.get_variants", params)
+        return result
+
+    @mcp.tool()
+    async def proj_get_active_variant(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get the currently active project variant.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with variant "name" and "description".
+            Returns "[No Variations]" if no variant is active.
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.get_active_variant", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_set_active_variant(
+        variant_name: str,
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Switch the active project variant.
+
+        Args:
+            variant_name: Name of the variant to activate
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary confirming the switch
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"variant_name": variant_name}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.set_active_variant", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_export_variant_matrix_csv(
+        output_path: str = "",
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Write the variant fitted/not-fitted matrix to a CSV.
+
+        Builds the conventional component-by-variant table: one row per
+        flattened component, one column per variant, each cell
+        ``Fitted`` / ``Not Fitted`` / ``Alternate``. Unlike
+        ``proj_list_variants`` (which lists only per-variant deviations), every
+        component appears, so the file merges cleanly with a BOM in a
+        spreadsheet.
+
+        Args:
+            output_path: Destination .csv. Defaults to
+                ``workspace/variant_matrix.csv``.
+            project_path: Optional project path. If None, uses the focused
+                project.
+
+        Returns:
+            {"output_path", "component_count", "variant_count"} or an error.
+        """
+        from pathlib import Path
+
+        from ..config import get_config
+        from ..export.variant_matrix_csv import format_variant_matrix_csv
+
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        matrix = await bridge.send_command_async(
+            "project.get_variant_matrix", params
+        )
+        if not isinstance(matrix, dict) or "rows" not in matrix:
+            return {"success": False,
+                    "error": "could not read variant matrix (open a PcbDoc project)"}
+
+        csv_text = format_variant_matrix_csv(matrix)
+        if output_path:
+            out = Path(output_path)
+        else:
+            out = get_config().workspace_dir / "variant_matrix.csv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(csv_text, encoding="utf-8")
+        return {
+            "success": True,
+            "output_path": str(out),
+            "component_count": matrix.get("component_count",
+                                          len(matrix.get("rows") or [])),
+            "variant_count": len(matrix.get("variants") or []),
+        }
+
+    @mcp.tool()
+    async def proj_print_all_variants(
+        output_dir: str = "",
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Export a PDF for every project variant.
+
+        One ``<variant>.pdf`` per variant, each made active in turn; the
+        original variant is restored at the end.
+
+        Args:
+            output_dir: Folder for the per-variant PDFs. Defaults to the
+                workspace directory.
+            project_path: Optional project path. If None, uses the focused
+                project.
+
+        Returns:
+            {"exported": [{variant, output_path, ok, error}], "count"} plus
+            ``restored``: the variant put back, or null if putting it
+            back FAILED: the project is then on another variant, and any
+            variant-sensitive call (a BOM, an export,
+            ``pcb_apply_dnp_paste_exclusion``) acts on the wrong set. A
+            failure also carries ``restore_error`` and a ``note``.
+        """
+        from pathlib import Path
+
+        from ..config import get_config
+
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+
+        listing = await bridge.send_command_async("project.get_variants", params)
+        variants = (listing or {}).get("variants", []) if isinstance(listing, dict) else []
+        active = await bridge.send_command_async("project.get_active_variant", params)
+        original = (active or {}).get("name") if isinstance(active, dict) else None
+
+        base = Path(output_dir) if output_dir else get_config().workspace_dir
+        base.mkdir(parents=True, exist_ok=True)
+
+        def _safe(s: str) -> str:
+            return "".join(c if c.isalnum() or c in "-_." else "_" for c in s) or "variant"
+
+        exported: list[dict[str, Any]] = []
+        for var in variants:
+            vname = var.get("name") if isinstance(var, dict) else str(var)
+            if not vname:
+                continue
+            out_pdf = base / f"{_safe(vname)}.pdf"
+            entry: dict[str, Any] = {"variant": vname, "output_path": str(out_pdf),
+                                     "ok": False, "error": ""}
+            try:
+                set_params = dict(params, variant_name=vname)
+                await bridge.send_command_async("project.set_active_variant", set_params)
+                res = await bridge.send_command_async(
+                    "project.export_pdf", {"output_path": str(out_pdf)}
+                )
+                entry["ok"] = bool(isinstance(res, dict) and res.get("success", True))
+                if isinstance(res, dict) and res.get("error"):
+                    entry["error"] = str(res["error"])
+            except Exception as exc:  # keep going across variants
+                entry["error"] = str(exc)
+            exported.append(entry)
+
+        # Restore the variant that was active before we started.
+        #
+        # Report whether that WORKED, not merely that it was attempted.
+        # This loop leaves the project on the last variant it touched,
+        # so a swallowed failure here hands back a project whose active
+        # variant is not the one the caller had, and every
+        # variant-sensitive operation after it acts on the wrong set:
+        # an export, a BOM, or pcb_apply_dnp_paste_exclusion stripping
+        # paste off the components the OTHER variant does not fit.
+        restored: Optional[str] = None
+        restore_error = ""
+        if original:
+            try:
+                await bridge.send_command_async(
+                    "project.set_active_variant", dict(params, variant_name=original)
+                )
+                restored = original
+            except Exception as exc:
+                restore_error = str(exc)
+
+        result: dict[str, Any] = {
+            "exported": exported,
+            "count": sum(1 for e in exported if e["ok"]),
+            "restored": restored,
+        }
+        if restore_error:
+            result["restore_error"] = restore_error
+            result["active_variant_unknown"] = True
+            result["note"] = (
+                "the originally-active variant could not be restored, so "
+                "the project is left on the last variant exported. Set it "
+                "back with proj_set_active_variant before any "
+                "variant-sensitive operation."
+            )
+        return result
+
+    @mcp.tool()
+    async def proj_create_variant(
+        name: str,
+        description: str = "",
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Create a new project variant.
+
+        After creating, use `proj_set_active_variant` to switch to it,
+        and `obj_modify` to configure component variations.
+
+        Args:
+            name: Name for the new variant
+            description: Optional description
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary confirming creation with name and description
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"name": name}
+        if description:
+            params["description"] = description
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.create_variant", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_delete_variant(
+        variant_name: str,
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Delete a project variant, with every component variation in it.
+
+        NOT REVERSIBLE FROM HERE: no script can add variation entries
+        back, so each one has to be redone by hand in Variant Management.
+        Read the variant with ``proj_list_variants`` first if you did not
+        create it; ``entries_removed`` reports how many went. Addressed
+        by name, since deleting one renumbers the rest.
+
+        Args:
+            variant_name: name of the variant to remove.
+            project_path: optional project path; defaults to the focused
+                project.
+
+        Returns:
+            ``{"success": true, "variant_name": ..., "entries_removed": N,
+            "variant_count_before": N, "variant_count_after": N,
+            "verified": true}``, or ``success: false`` with a ``reason``
+            when the variant is still listed afterwards.
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"variant_name": variant_name}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.delete_variant", params
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Additional project operations
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def proj_list_open() -> dict[str, Any]:
+        """List all currently open projects in the Altium workspace.
+
+        Returns:
+            Dictionary with "projects" array (each: project_name,
+            project_path, document_count) and "count"
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.get_open_projects", {}
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Messages, search, connectivity, import, path, document parameters
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def proj_get_messages(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get all messages from the Messages panel (compile errors, ERC violations, etc.).
+
+        Compiles the project first so violation data is current, then returns
+        every violation with its text, severity, and source document.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with "messages" array (each: message, severity, source) and "count"
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.get_messages", params)
+        return result
+
+    @mcp.tool()
+    async def proj_find_component(
+        search_text: str,
+        search_by: str = "designator",
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Search for components across all project sheets.
+
+        DATASHEET DISCIPLINE: Results carry `_datasheet_guidance`. If
+        you're searching by a part number / comment to answer a
+        technical question (pinout, rating, behavior), the matched
+        parts' datasheets must be consulted before drawing any
+        conclusion. Symbol metadata is not ground truth.
+
+        Performs a case-insensitive partial match against the chosen property.
+
+        Args:
+            search_text: Text to search for (e.g., "U1", "100nF", "LM317")
+            search_by: Property to search, "designator", "value", or "comment" (default "designator")
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with "results" array (each: designator, comment, footprint,
+            lib_ref, sheet, location_x, location_y) and "count", plus
+            `_datasheet_guidance` + `_datasheet_parts`.
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {
+            "search_text": search_text,
+            "search_by": search_by,
+        }
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async("project.find_component", params)
+        if isinstance(result, dict):
+            # find_component response puts matches under "results"
+            # with comment/value fields, reshape to the components form
+            # extract_unique_parts understands.
+            synthetic = {"components": result.get("results") or []}
+            return tag_response(
+                result,
+                components=synthetic,
+                context="proj_find_component",
+            )
+        return result
+
+    @mcp.tool()
+    async def proj_get_connectivity(
+        designator: str,
+        project_path: Optional[str] = None,
+        force_recompile: bool = False,
+    ) -> dict[str, Any]:
+        """Get pin-to-net connectivity for a specific component.
+
+        For more than one component prefer `proj_get_connectivity_many`.
+        Compiles the project and returns every pin with number, name, net
+        and electrical type.
+
+        Args:
+            designator: Component designator (e.g., "U1", "R8")
+            project_path: Optional project path. If None, uses active.
+            force_recompile: SaveAll + invalidate cache + recompile
+                before reading. Use when you need a guaranteed-fresh
+                netlist.
+
+        Pin names come from the symbol and can be wrong: check a pin's
+        function against the manufacturer datasheet before relying on it
+        (see `_datasheet_guidance`).
+
+        Returns:
+            Dict with designator, comment, sheet, pin_count, pins[],
+            plus `_datasheet_guidance` + `_datasheet_parts`.
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {"designator": designator}
+        if project_path:
+            params["project_path"] = project_path
+        if force_recompile:
+            # Project.pas ForceRecompileIfRequested reads
+            # "force_recompile". Sent under the tool's own name this
+            # matched nothing, so the flag was dead and a caller who
+            # asked for fresh data got the cached compile instead.
+            params["force_recompile"] = "true"
+        result = await bridge.send_command_async("project.get_connectivity", params)
+        hint = BulkHintTracker.record_and_hint("proj_get_connectivity")
+        if hint and isinstance(result, dict):
+            result["_hint_bulk"] = hint
+        if isinstance(result, dict):
+            comment = str(result.get("comment") or "").strip()
+            explicit = [{
+                "manufacturer": "",
+                "part_number": comment,
+                "designators": designator,
+            }]
+            return tag_response(
+                result, explicit_parts=explicit, context="proj_get_connectivity"
+            )
+        return result
+
+    @mcp.tool()
+    async def proj_get_connectivity_many(
+        designators: list[str],
+        project_path: Optional[str] = None,
+        force_recompile: bool = False,
+    ) -> dict[str, Any]:
+        """Pin-net connectivity for MANY components in ONE round-trip.
+
+        PREFER THIS over looping `proj_get_connectivity`.
+
+        DATASHEET DISCIPLINE: pin_name on every component in the
+        response comes from the symbol and can be wrong. Before
+        reasoning about pin functions, fetch each part's manufacturer
+        datasheet. The response carries `_datasheet_guidance` +
+        `_datasheet_parts`.
+
+        Args:
+            designators: List of component designators.
+            project_path: Optional project path.
+            force_recompile: SaveAll + invalidate cache + recompile
+                before reading. Use when you need a guaranteed-fresh
+                netlist.
+
+        Returns:
+            Dict with components[], matched, requested, not_found[],
+            plus `_datasheet_guidance` + `_datasheet_parts`.
+        """
+        bridge = get_bridge()
+        cleaned = [str(d).strip() for d in (designators or []) if str(d).strip()]
+        if not cleaned:
+            return {"error": "No designators provided", "matched": 0}
+        params: dict[str, Any] = {"designators": "~~".join(cleaned)}
+        if project_path:
+            params["project_path"] = project_path
+        if force_recompile:
+            # Project.pas ForceRecompileIfRequested reads
+            # "force_recompile". Sent under the tool's own name this
+            # matched nothing, so the flag was dead and a caller who
+            # asked for fresh data got the cached compile instead.
+            params["force_recompile"] = "true"
+        result = await bridge.send_command_async(
+            "project.get_connectivity_batch", params
+        )
+        if isinstance(result, dict):
+            comps = result.get("components") or []
+            explicit = []
+            seen_keys: set[tuple[str, str]] = set()
+            for c in comps:
+                if not isinstance(c, dict):
+                    continue
+                desig = str(c.get("designator") or "").strip()
+                pn = str(c.get("comment") or "").strip()
+                key = (pn.lower(), desig.lower())
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                explicit.append({
+                    "manufacturer": "",
+                    "part_number": pn,
+                    "designators": desig,
+                })
+            return tag_response(
+                result,
+                explicit_parts=explicit,
+                context="proj_get_connectivity_many",
+            )
+        return result
+
+    @mcp.tool()
+    async def proj_force_recompile() -> dict[str, Any]:
+        """Flush all dirty docs, invalidate the compile cache, and recompile.
+
+        Use this when you need a guaranteed-fresh netlist, e.g.
+        immediately before re-running a connectivity check the user
+        has disputed. Returns prev / new compile tick so you can
+        verify the recompile actually happened.
+
+        Returns:
+            Dict with recompiled, prev_compile_tick, new_compile_tick,
+            project path.
+        """
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "project.force_recompile", {}, timeout=120.0
+        )
+
+    @mcp.tool()
+    async def proj_get_compile_freshness() -> dict[str, Any]:
+        """Report the age of the cached netlist and which docs are dirty.
+
+        Use this when you're about to disagree with the user about
+        connectivity, first check how stale the netlist you're
+        reading actually is, and whether any open editor docs haven't
+        been saved yet. A dirty doc means the netlist does NOT
+        reflect what the user is looking at.
+
+        Returns:
+            Dict with compile_age_ms, compile_cached (bool), ttl_ms,
+            open_doc_count, dirty_doc_count, dirty_docs[], project.
+        """
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "project.get_compile_freshness", {}
+        )
+
+    @mcp.tool()
+    async def proj_import_document(
+        source_path: str,
+    ) -> dict[str, Any]:
+        """Import a document into the focused project from an external path.
+
+        Copies the file into the project directory (if not already there),
+        adds it to the project, and saves the project file.
+
+        Args:
+            source_path: Full path to the source document (SchDoc, PcbDoc, etc.)
+
+        Returns:
+            Dictionary with success status, source_path, and dest_path
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.import_document", {"source_path": source_path}
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_get_path() -> dict[str, Any]:
+        """Get the full path of the currently focused project file.
+
+        Returns:
+            Dictionary with project_path, project_dir, and project_name
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async("project.get_project_path")
+        return result
+
+    @mcp.tool()
+    async def proj_set_document_parameter(
+        file_path: str,
+        name: str,
+        value: str,
+    ) -> dict[str, Any]:
+        """Set a document-level parameter on a specific schematic sheet.
+
+        Useful for per-sheet title block data (e.g., "SheetTitle", "Revision").
+        If the parameter already exists it is updated; otherwise a new hidden
+        parameter object is created on the sheet.
+
+        NOTE: the target sheet must already be loaded as a proper project
+        member. Call `proj_load_sheets` once at the start of a batch;
+        auto-opening from inside this tool risks detaching the sheet and
+        rendering it as a "free document". If the sheet isn't loaded this
+        tool returns NOT_LOADED.
+
+        The write is persisted to disk immediately via the IServerDocument
+        API, no subsequent `app_save_all` is required.
+
+        Args:
+            file_path: Full path to the schematic document (.SchDoc).
+                Use Windows-style backslashes (e.g. C:\\path\\Sheet.SchDoc),
+                not forward slashes.
+            name: Parameter name
+            value: Parameter value
+
+        Returns:
+            Dictionary with file_path, name, value, and dirty=true
+            (the in-memory flag; the disk write already happened, so no
+            `app_save_all` is needed for this parameter).
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.set_document_parameter",
+            {"file_path": file_path, "name": name, "value": value},
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Design verification and cross-probing tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def proj_compare_sch_pcb(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Compare schematic and PCB component counts.
+
+        Compiles the project and compares physical component counts between the
+        schematic and the primary PCB document, via the component mappings
+        (matched + side-only) -- the same authoritative path as
+        ``proj_get_differences``. For the per-component breakdown of what is
+        extra on each side, use ``proj_get_differences``.
+
+        DATASHEET DISCIPLINE: If the diff reveals mismatched or missing
+        parts and you're proposing a fix, the datasheets of the parts
+        involved are authoritative on their pinout and behavior, fetch
+        them before suggesting a footprint change or pin reassignment.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with sch_components, pcb_components, components_match
+            (bool), and pcb_path. (Net-count comparison is not provided here;
+            use ``proj_get_nets`` / ``pcb_get_nets``.)
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.compare_sch_pcb", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_sync_pcb() -> dict[str, Any]:
+        """Push schematic changes to the PCB (Design > Update PCB Document).
+
+        NOT SILENT: Altium's ECO dialog cannot be suppressed, so this
+        BLOCKS the bridge until a human clicks Execute Changes. Never use
+        it unattended (use pcb_place_components to populate a board
+        without a schematic). It focuses the PCB first so the update runs
+        schematic to board (refuses with WRONG_FOCUS if it cannot); check
+        the ECO lists the PcbDoc before executing. ``app_list_open_dialogs``
+        reads the dialog while the bridge is blocked.
+
+        Returns:
+            success, pcb_path, before/after mapping counts,
+            components_added_to_pcb, components_removed_from_pcb,
+            components_in_sync, and dialog_outcome_verified (always
+            false: which button was pressed is unknown). The counts see
+            components added or removed only, not footprint, parameter
+            or net changes.
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async("project.update_pcb", {})
+        return result
+
+    @mcp.tool()
+    async def proj_sync_schematic() -> dict[str, Any]:
+        """Push PCB changes back to schematic (back-annotate ECO). Attempts silent execution.
+
+        Equivalent to Design > Update Schematic in Altium Designer.
+        Mirror of update_pcb: compiles, records before-state mappings,
+        invokes PCB:UpdateSchematicFromPCB with silent-mode parameter flags
+        (DisableDialog, Silent, NoConfirm, AutoApply), recompiles, and
+        reports the after-state delta. Modern Altium versions execute
+        without a dialog; older versions may still require manual
+        confirmation (flagged via dialog_may_have_opened).
+
+        Returns:
+            Dictionary with success, pcb_path, before/after mapping counts,
+            components_added_to_schematic, components_removed_from_schematic,
+            in_sync, and dialog_may_have_opened flag.
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.update_schematic", {}
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_get_differences(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get detailed differences between schematic and PCB netlist.
+
+        Compiles the project and uses component mappings to find:
+        - Matched components (present in both schematic and PCB)
+        - Extra components in schematic (not yet in PCB)
+        - Extra components in PCB (not in schematic)
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with matched_components, extra_in_schematic (array),
+            extra_in_pcb (array), and in_sync (bool)
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.get_design_differences", params
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_lock_designator(
+        designator: str,
+        lock: bool = True,
+    ) -> dict[str, Any]:
+        """Lock or unlock component designators to prevent re-annotation.
+
+        When locked, designators are preserved during annotation operations.
+        Use designator="all" to lock/unlock all components on the active sheet.
+
+        Args:
+            designator: Component designator (e.g., "U1", "R3") or "all" for all components
+            lock: True to lock, False to unlock (default True)
+
+        Returns:
+            Dictionary with designator, locked status, and count of affected components
+        """
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "project.lock_designator",
+            {
+                "designator": designator,
+                "lock": "true" if lock else "false",
+            },
+        )
+        return result
+
+    @mcp.tool()
+    async def proj_get_options(
+        project_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get project options: output path, hierarchy mode, compiler settings.
+
+        Returns configuration details including output directory, hierarchy mode,
+        document counts, variant count, channel settings, and net naming options.
+
+        Args:
+            project_path: Optional project path. If None, uses active project.
+
+        Returns:
+            Dictionary with project_name, output_path, hierarchy_mode,
+            logical_document_count, physical_document_count, variant_count,
+            channel settings, and net naming options
+        """
+        bridge = get_bridge()
+        params: dict[str, Any] = {}
+        if project_path:
+            params["project_path"] = project_path
+        result = await bridge.send_command_async(
+            "project.get_project_options", params
+        )
+        return result

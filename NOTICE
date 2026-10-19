@@ -1,0 +1,24 @@
+Altium Agent
+An MCP server, CLI and Claude skills for designing boards in Altium Designer.
+
+This product includes software developed by George Saliba
+(https://github.com/salitronic/eda-agent), Copyright 2026 George Saliba,
+licensed under the Apache License, Version 2.0. The eda-agent NOTICE reads:
+
+    eda-agent
+    Copyright 2026 George Saliba <george.saliba@salitronic.com>
+
+    This product includes software developed by George Saliba
+    (https://github.com/salitronic/eda-agent).
+
+Every file taken from eda-agent keeps its copyright line and carries a
+"Modified for Altium Agent" line; docs/PROVENANCE.md lists what was taken
+and what changed.
+
+Code adapted from other sources is listed in docs/PROVENANCE.md with its
+licence. Freerouting (GPL-3.0) is never included: when a project's policy
+allows it, Altium Agent runs a separately installed Freerouting as an
+external process.
+
+Altium and Altium Designer are trademarks of Altium Limited. Altium Agent is
+not affiliated with or endorsed by Altium Limited.

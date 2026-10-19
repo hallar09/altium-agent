@@ -1,0 +1,341 @@
+{
+ "about": "Violations of the Altium Agent hardening rules (lint_hardening.py) inherited from eda-agent. Each is downgraded to a warning until it is fixed and re-verified on a live Altium; the list may only shrink (tests/test_lint_hardening.py). New code gets no entry.",
+ "entries": [
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_AddDatafileLink",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_CopyObjects",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_CreateObject",
+   "rule": "preprocess-needs-try-finally",
+   "count": 2
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_MirrorSchComponent",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceBus",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceBusEntry",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceCompileMask",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceCrossSheetConnector",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceDirective",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceHarnessConnector",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceImage",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceJunction",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceLine",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceNetLabel",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceNoERC",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceNote",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlacePort",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlacePowerPort",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceProbe",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceRectangle",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceSchComponentFromLibrary",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceSheetEntry",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceSheetSymbol",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceTextFrame",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_PlaceWire",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_ReplaceComponent",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_ReplicateSchComponent",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_SetComponentPartId",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_SetComponentUniqueId",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_SetGrid",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_SetSchComponentParameters",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "Gen_SetSchUnits",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Generic.pas",
+   "routine": "ProcessSchDocObjects",
+   "rule": "preprocess-needs-try-finally",
+   "count": 2
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_AddPin",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_AddSymbolArc",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_AddSymbolLine",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_AddSymbolPolygon",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_AddSymbolRectangle",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_CopyComponent",
+   "rule": "preprocess-needs-try-finally",
+   "count": 2
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_CreateSymbol",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_DeleteComponent",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_LinkFootprint",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_MoveComponents",
+   "rule": "preprocess-needs-try-finally",
+   "count": 2
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_NormalizeImplementations",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_PlaceDbLibComponent",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_RemoveModel",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_SetComponentDescription",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_SetModelName",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "Library.pas",
+   "routine": "Lib_SetModelSource",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  },
+  {
+   "file": "PCB.pas",
+   "routine": "PCB_AddTestpointsForNetClass",
+   "rule": "mutate-while-iterating",
+   "count": 1
+  },
+  {
+   "file": "PCB.pas",
+   "routine": "PCB_CopyDesignatorsToMechLayer",
+   "rule": "mutate-while-iterating",
+   "count": 1
+  },
+  {
+   "file": "PCB.pas",
+   "routine": "PCB_FilletCorners",
+   "rule": "mutate-while-iterating",
+   "count": 10
+  },
+  {
+   "file": "PCB.pas",
+   "routine": "PCB_MoveTracksToLayer",
+   "rule": "mutate-while-iterating",
+   "count": 1
+  },
+  {
+   "file": "PCB.pas",
+   "routine": "PCB_ReplicateLayout",
+   "rule": "mutate-while-iterating",
+   "count": 2
+  },
+  {
+   "file": "Project.pas",
+   "routine": "Proj_Annotate",
+   "rule": "preprocess-needs-try-finally",
+   "count": 2
+  },
+  {
+   "file": "Project.pas",
+   "routine": "Proj_LockDesignator",
+   "rule": "preprocess-needs-try-finally",
+   "count": 1
+  }
+ ]
+}

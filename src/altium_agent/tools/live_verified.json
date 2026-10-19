@@ -1,0 +1,4 @@
+{
+  "about": "Tools verified against a live Altium Designer by Altium Agent's release run (docs/RELEASE_VERIFICATION.md). Only that run adds records; each names the Altium build, the deployed script stamp and an evidence file. Empty until the first live run on the user's machine.",
+  "records": []
+}

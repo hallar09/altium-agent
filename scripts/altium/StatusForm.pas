@@ -72,16 +72,25 @@ Var
 { after the $); a malformed 7-digit literal bombs the parser without an   }
 { obvious error location, so always double-count.                          }
 Const
-    COLOR_BG_BASE       = $001A1B1E;
-    COLOR_BG_CARD       = $0025262B;
-    COLOR_BG_ELEVATED   = $002E2F35;
-    COLOR_ACCENT_BLUE   = $00FF9E4A;   { #4A9EFF in BGR }
-    COLOR_ACCENT_AMBER  = $00589EE0;   { #E09E58 in BGR }
-    COLOR_ACCENT_RED    = $005C5CFF;   { #FF5C5C in BGR }
-    COLOR_ACCENT_GREEN  = $006BC464;   { #64C46B in BGR }
-    COLOR_TEXT_BODY     = $00E1E2E6;
-    COLOR_TEXT_MUTED    = $008B8E96;
-    COLOR_TEXT_FAINT    = $00696C73;
+    { Altium Agent palette: dark slate, copper accent, teal for ready.  }
+    { Values are BGR ($00BBGGRR).                                       }
+    COLOR_BG_BASE       = $001C1612;   { #12161C }
+    COLOR_BG_CARD       = $002B221B;   { #1B222B }
+    COLOR_BG_ELEVATED   = $003B3026;   { #26303B }
+    COLOR_ACCENT        = $003C8AE0;   { #E08A3C copper }
+    COLOR_ACCENT_HOVER  = $004E9AF0;   { #F09A4E }
+    COLOR_ACCENT_AMBER  = $0041B3E3;   { #E3B341 }
+    COLOR_AMBER_HOVER   = $005EC4F0;   { #F0C45E }
+    COLOR_ACCENT_RED    = $005A60F0;   { #F0605A }
+    COLOR_ACCENT_GREEN  = $00A8C83C;   { #3CC8A8 teal }
+    COLOR_BTN           = $00372C23;   { #232C37 }
+    COLOR_BTN_HOVER     = $00473A2F;   { #2F3A47 }
+    COLOR_CHK_HOVER     = $0031271E;   { #1E2731 }
+    COLOR_DANGER        = $002E2A5A;   { #5A2A2E }
+    COLOR_DANGER_HOVER  = $0036307A;   { #7A3036 }
+    COLOR_TEXT_BODY     = $00F3EDE6;   { #E6EDF3 }
+    COLOR_TEXT_MUTED    = $00A5988B;   { #8B98A5 }
+    COLOR_TEXT_FAINT    = $0073675C;   { #5C6773 }
 
     MAX_LOG_LINES       = 2000;
     SPINNER_FRAMES      = 4;
@@ -390,7 +399,7 @@ Begin
             Else
             Begin
                 pnl_StatusDot.Color := COLOR_ACCENT_GREEN;
-                lbl_Status.Caption := 'idle';
+                lbl_Status.Caption := 'ready';
                 lbl_Status.Font.Color := COLOR_TEXT_BODY;
             End;
         Except End;
@@ -440,17 +449,17 @@ Begin
     Try
         If NewEnabled Then
         Begin
-            btn_OpenWeb.Color := COLOR_ACCENT_BLUE;
+            btn_OpenWeb.Color := COLOR_ACCENT;
             btn_OpenWeb.Font.Color := $00FFFFFF;
             btn_OpenWeb.Cursor := crHandPoint;
-            btn_OpenWeb.Caption := 'Open Dashboard';
+            btn_OpenWeb.Caption := 'Open dashboard';
         End
         Else
         Begin
             btn_OpenWeb.Color := COLOR_BG_CARD;
             btn_OpenWeb.Font.Color := COLOR_TEXT_FAINT;
             btn_OpenWeb.Cursor := crDefault;
-            btn_OpenWeb.Caption := 'Open Dashboard  (not running)';
+            btn_OpenWeb.Caption := 'Open dashboard  (not running)';
         End;
     Except End;
 End;
@@ -611,10 +620,10 @@ Begin
         Try StatusForm.Top  := NewTop;  Except End;
 
         If Not StatusForm.Visible Then StatusForm.Show;
-        Try StatusForm.Caption := 'Altium Agent MCP'; Except End;
+        Try StatusForm.Caption := 'Altium Agent'; Except End;
         Try lbl_Version.Caption := 'v' + SCRIPT_VERSION; Except End;
         Try pnl_StatusDot.Color := COLOR_ACCENT_GREEN; Except End;
-        Try lbl_Status.Caption := 'idle'; Except End;
+        Try lbl_Status.Caption := 'ready'; Except End;
         Try lbl_LastErr.Caption := ''; Except End;
         { Button is always enabled: dashboard can run standalone. }
         UpdateOpenWebState(0);
@@ -664,12 +673,12 @@ Begin
         Else
         Begin
             btn_Pause.Caption := 'Pause';
-            btn_Pause.Color := $002A2C32;
+            btn_Pause.Color := COLOR_BTN;
             btn_Pause.Font.Color := COLOR_TEXT_BODY;
             If Not InFlightActive Then
             Begin
                 pnl_StatusDot.Color := COLOR_ACCENT_GREEN;
-                lbl_Status.Caption := 'idle';
+                lbl_Status.Caption := 'ready';
                 lbl_Status.Font.Color := COLOR_TEXT_BODY;
             End;
         End;
@@ -698,7 +707,7 @@ Var
 Begin
     If Not OpenWebEnabled Then
     Begin
-        Try lbl_LastErr.Caption := 'no dashboard running - copy the command below'; Except End;
+        Try lbl_LastErr.Caption := 'no dashboard running: copy the command at the bottom'; Except End;
         Exit;
     End;
     Try
@@ -765,68 +774,68 @@ End;
 { Hover handlers ============================================================ }
 
 Procedure btn_DetachEnter(Sender : TObject);
-Begin Try btn_Detach.Color := $00D05050; Except End; End;
+Begin Try btn_Detach.Color := COLOR_DANGER_HOVER; Except End; End;
 Procedure btn_DetachLeave(Sender : TObject);
-Begin Try btn_Detach.Color := $00B14545; Except End; End;
+Begin Try btn_Detach.Color := COLOR_DANGER; Except End; End;
 
 Procedure btn_ClearLogEnter(Sender : TObject);
-Begin Try btn_ClearLog.Color := $003A3C42; Except End; End;
+Begin Try btn_ClearLog.Color := COLOR_BTN_HOVER; Except End; End;
 Procedure btn_ClearLogLeave(Sender : TObject);
-Begin Try btn_ClearLog.Color := $002A2C32; Except End; End;
+Begin Try btn_ClearLog.Color := COLOR_BTN; Except End; End;
 
 Procedure btn_PauseEnter(Sender : TObject);
 Begin
     Try
-        If PausedFlag Then btn_Pause.Color := $00B388F0
-        Else btn_Pause.Color := $003A3C42;
+        If PausedFlag Then btn_Pause.Color := COLOR_AMBER_HOVER
+        Else btn_Pause.Color := COLOR_BTN_HOVER;
     Except End;
 End;
 Procedure btn_PauseLeave(Sender : TObject);
 Begin
     Try
         If PausedFlag Then btn_Pause.Color := COLOR_ACCENT_AMBER
-        Else btn_Pause.Color := $002A2C32;
+        Else btn_Pause.Color := COLOR_BTN;
     Except End;
 End;
 
 Procedure btn_RenewEnter(Sender : TObject);
-Begin Try btn_Renew.Color := $003A3C42; Except End; End;
+Begin Try btn_Renew.Color := COLOR_BTN_HOVER; Except End; End;
 Procedure btn_RenewLeave(Sender : TObject);
-Begin Try btn_Renew.Color := $002A2C32; Except End; End;
+Begin Try btn_Renew.Color := COLOR_BTN; Except End; End;
 
 Procedure btn_OpenWebEnter(Sender : TObject);
 Begin
     If OpenWebEnabled Then
-        Try btn_OpenWeb.Color := $00FFAE6A; Except End;
+        Try btn_OpenWeb.Color := COLOR_ACCENT_HOVER; Except End;
 End;
 Procedure btn_OpenWebLeave(Sender : TObject);
 Begin
     If OpenWebEnabled Then
-        Try btn_OpenWeb.Color := COLOR_ACCENT_BLUE; Except End
+        Try btn_OpenWeb.Color := COLOR_ACCENT; Except End
     Else
         Try btn_OpenWeb.Color := COLOR_BG_CARD; Except End;
 End;
 
 Procedure chk_HidePingsEnter(Sender : TObject);
-Begin Try chk_HidePings.Color := $00252630; Except End; End;
+Begin Try chk_HidePings.Color := COLOR_CHK_HOVER; Except End; End;
 Procedure chk_HidePingsLeave(Sender : TObject);
 Begin Try chk_HidePings.Color := COLOR_BG_BASE; Except End; End;
 
 Procedure chk_OnlySlowEnter(Sender : TObject);
-Begin Try chk_OnlySlow.Color := $00252630; Except End; End;
+Begin Try chk_OnlySlow.Color := COLOR_CHK_HOVER; Except End; End;
 Procedure chk_OnlySlowLeave(Sender : TObject);
 Begin Try chk_OnlySlow.Color := COLOR_BG_BASE; Except End; End;
 
 Procedure chk_OnTopEnter(Sender : TObject);
-Begin Try chk_OnTop.Color := $00252630; Except End; End;
+Begin Try chk_OnTop.Color := COLOR_CHK_HOVER; Except End; End;
 Procedure chk_OnTopLeave(Sender : TObject);
 Begin Try chk_OnTop.Color := COLOR_BG_BASE; Except End; End;
 
 Procedure tab_LogEnter(Sender : TObject);
 Begin
     Try
-        If mmo_Log.Visible Then tab_Log.Color := $00252630
-        Else tab_Log.Color := $002A2C32;
+        If mmo_Log.Visible Then tab_Log.Color := COLOR_CHK_HOVER
+        Else tab_Log.Color := COLOR_BTN;
     Except End;
 End;
 Procedure tab_LogLeave(Sender : TObject);
@@ -840,8 +849,8 @@ End;
 Procedure tab_PerfEnter(Sender : TObject);
 Begin
     Try
-        If mmo_Perf.Visible Then tab_Perf.Color := $00252630
-        Else tab_Perf.Color := $002A2C32;
+        If mmo_Perf.Visible Then tab_Perf.Color := COLOR_CHK_HOVER
+        Else tab_Perf.Color := COLOR_BTN;
     Except End;
 End;
 Procedure tab_PerfLeave(Sender : TObject);
@@ -859,7 +868,7 @@ Begin
         mmo_Log.Visible := True;
         mmo_Perf.Visible := False;
         tab_Log.Color := COLOR_BG_BASE;
-        tab_Log.Font.Color := COLOR_ACCENT_BLUE;
+        tab_Log.Font.Color := COLOR_ACCENT;
         tab_Perf.Color := COLOR_BG_CARD;
         tab_Perf.Font.Color := COLOR_TEXT_MUTED;
     Except End;
@@ -872,7 +881,7 @@ Begin
         mmo_Log.Visible := False;
         mmo_Perf.Visible := True;
         tab_Perf.Color := COLOR_BG_BASE;
-        tab_Perf.Font.Color := COLOR_ACCENT_BLUE;
+        tab_Perf.Font.Color := COLOR_ACCENT;
         tab_Log.Color := COLOR_BG_CARD;
         tab_Log.Font.Color := COLOR_TEXT_MUTED;
     Except End;

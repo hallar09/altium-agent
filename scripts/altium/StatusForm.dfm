@@ -3,14 +3,14 @@ object StatusForm: TStatusForm
   Top = 200
   BorderIcons = [biSystemMenu, biMinimize]
   BorderStyle = bsSizeable
-  Caption = 'Altium Agent MCP'
-  ClientHeight = 650
-  ClientWidth = 380
-  Color = $001A1B1E
-  Constraints.MinHeight = 500
-  Constraints.MinWidth = 360
+  Caption = 'Altium Agent'
+  ClientHeight = 680
+  ClientWidth = 400
+  Color = $001C1612
+  Constraints.MinHeight = 520
+  Constraints.MinWidth = 400
   Font.Charset = DEFAULT_CHARSET
-  Font.Color = $00E1E2E6
+  Font.Color = $00F3EDE6
   Font.Height = -11
   Font.Name = 'Segoe UI'
   Font.Style = []
@@ -21,224 +21,108 @@ object StatusForm: TStatusForm
   PixelsPerInch = 96
   TextHeight = 13
   OnClose = StatusFormClose
-  object pnl_Header: TPanel
+  object pnl_TopAccent: TPanel
     Left = 0
     Top = 0
-    Width = 380
-    Height = 48
+    Width = 400
+    Height = 3
     Align = alTop
     BevelOuter = bvNone
-    Color = $00202126
-    object pnl_StatusDot: TPanel
-      Left = 14
-      Top = 19
-      Width = 10
-      Height = 10
-      BevelOuter = bvNone
-      Caption = ''
-      Color = $0064C46B
-    end
-    object lbl_Spinner: TLabel
-      Left = 28
-      Top = 14
-      Width = 14
+    Color = $003C8AE0
+  
+  end
+  object pnl_Header: TPanel
+    Left = 0
+    Top = 3
+    Width = 400
+    Height = 94
+    Align = alTop
+    BevelOuter = bvNone
+    Color = $001C1612
+    object lbl_Brand: TLabel
+      Left = 16
+      Top = 12
+      Width = 200
       Height = 18
       AutoSize = False
-      Alignment = taCenter
-      Caption = ''
+      Caption = 'ALTIUM AGENT'
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00FF9E4A
-      Font.Height = -14
+      Font.Color = $003C8AE0
+      Font.Height = -13
+      Font.Name = 'Segoe UI Semibold'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object lbl_Tagline: TLabel
+      Left = 16
+      Top = 30
+      Width = 260
+      Height = 14
+      AutoSize = False
+      Caption = 'Altium Designer bridge for Claude'
+      Font.Charset = DEFAULT_CHARSET
+      Font.Color = $0073675C
+      Font.Height = -10
       Font.Name = 'Segoe UI'
       Font.Style = []
       ParentFont = False
     end
-    object lbl_Status: TLabel
-      Left = 46
-      Top = 14
-      Width = 244
-      Height = 20
-      AutoSize = False
-      EllipsisPosition = epEndEllipsis
-      Caption = 'idle'
-      Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00E1E2E6
-      Font.Height = -13
-      Font.Name = 'Segoe UI Semibold'
-      Font.Style = []
-      ParentFont = False
-    end
     object lbl_Version: TLabel
-      Left = 290
-      Top = 18
-      Width = 80
+      Left = 296
+      Top = 14
+      Width = 90
       Height = 14
-      Alignment = taRightJustify
       AutoSize = False
+      Alignment = taRightJustify
       Caption = 'v?'
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00696C73
+      Font.Color = $0073675C
       Font.Height = -10
       Font.Name = 'Consolas'
       Font.Style = []
       ParentFont = False
     end
-  end
-  object pnl_KPIs: TPanel
-    Left = 0
-    Top = 48
-    Width = 380
-    Height = 76
-    Align = alTop
-    BevelOuter = bvNone
-    Color = $001A1B1E
-    object pnl_K1: TPanel
+    object pnl_StatusCard: TPanel
       Left = 12
-      Top = 6
-      Width = 84
-      Height = 64
+      Top = 52
+      Width = 376
+      Height = 34
       BevelOuter = bvNone
-      Color = $0025262B
-      object lbl_LblUp: TLabel
-        Left = 0
-        Top = 8
-        Width = 84
-        Height = 12
-        Alignment = taCenter
-        AutoSize = False
-        Caption = 'UPTIME'
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = $008B8E96
-        Font.Height = -9
-        Font.Name = 'Segoe UI'
-        Font.Style = [fsBold]
-        ParentFont = False
+      Color = $002B221B
+      object pnl_StatusDot: TPanel
+        Left = 12
+        Top = 12
+        Width = 10
+        Height = 10
+        BevelOuter = bvNone
+        Caption = ''
+        Color = $00A8C83C
       end
-      object lbl_ValUp: TLabel
-        Left = 0
-        Top = 24
-        Width = 84
-        Height = 28
-        Alignment = taCenter
+      object lbl_Spinner: TLabel
+        Left = 28
+        Top = 7
+        Width = 16
+        Height = 20
         AutoSize = False
-        Caption = '0s'
+        Caption = ''
         Font.Charset = DEFAULT_CHARSET
-        Font.Color = $00E1E2E6
-        Font.Height = -19
-        Font.Name = 'Segoe UI Semibold'
+        Font.Color = $003C8AE0
+        Font.Height = -14
+        Font.Name = 'Consolas'
         Font.Style = []
         ParentFont = False
       end
-    end
-    object pnl_K2: TPanel
-      Left = 104
-      Top = 6
-      Width = 84
-      Height = 64
-      BevelOuter = bvNone
-      Color = $0025262B
-      object lbl_LblReq: TLabel
-        Left = 0
+      object lbl_Status: TLabel
+        Left = 46
         Top = 8
-        Width = 84
-        Height = 12
-        Alignment = taCenter
+        Width = 320
+        Height = 20
         AutoSize = False
-        Caption = 'REQUESTS'
+        EllipsisPosition = epEndEllipsis
+        Caption = 'ready'
         Font.Charset = DEFAULT_CHARSET
-        Font.Color = $008B8E96
-        Font.Height = -9
-        Font.Name = 'Segoe UI'
-        Font.Style = [fsBold]
-        ParentFont = False
-      end
-      object lbl_ValReq: TLabel
-        Left = 0
-        Top = 24
-        Width = 84
-        Height = 28
-        Alignment = taCenter
-        AutoSize = False
-        Caption = '0'
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = $00E1E2E6
-        Font.Height = -19
-        Font.Name = 'Segoe UI Semibold'
-        Font.Style = []
-        ParentFont = False
-      end
-    end
-    object pnl_K3: TPanel
-      Left = 196
-      Top = 6
-      Width = 84
-      Height = 64
-      BevelOuter = bvNone
-      Color = $0025262B
-      object lbl_LblMs: TLabel
-        Left = 0
-        Top = 8
-        Width = 84
-        Height = 12
-        Alignment = taCenter
-        AutoSize = False
-        Caption = 'BUSY TIME'
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = $008B8E96
-        Font.Height = -9
-        Font.Name = 'Segoe UI'
-        Font.Style = [fsBold]
-        ParentFont = False
-      end
-      object lbl_ValMs: TLabel
-        Left = 0
-        Top = 24
-        Width = 84
-        Height = 28
-        Alignment = taCenter
-        AutoSize = False
-        Caption = '0s'
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = $00E1E2E6
-        Font.Height = -19
-        Font.Name = 'Segoe UI Semibold'
-        Font.Style = []
-        ParentFont = False
-      end
-    end
-    object pnl_K4: TPanel
-      Left = 288
-      Top = 6
-      Width = 80
-      Height = 64
-      BevelOuter = bvNone
-      Color = $0025262B
-      object lbl_LblStop: TLabel
-        Left = 0
-        Top = 8
-        Width = 80
-        Height = 12
-        Alignment = taCenter
-        AutoSize = False
-        Caption = 'AUTO-OFF IN'
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = $008B8E96
-        Font.Height = -9
-        Font.Name = 'Segoe UI'
-        Font.Style = [fsBold]
-        ParentFont = False
-      end
-      object lbl_ValStop: TLabel
-        Left = 0
-        Top = 24
-        Width = 80
-        Height = 28
-        Alignment = taCenter
-        AutoSize = False
-        Caption = '10m'
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = $0064C46B
-        Font.Height = -19
+        Font.Color = $00F3EDE6
+        Font.Height = -13
         Font.Name = 'Segoe UI Semibold'
         Font.Style = []
         ParentFont = False
@@ -247,47 +131,244 @@ object StatusForm: TStatusForm
   end
   object pnl_ErrBar: TPanel
     Left = 0
-    Top = 124
-    Width = 380
-    Height = 18
+    Top = 97
+    Width = 400
+    Height = 20
     Align = alTop
     BevelOuter = bvNone
-    Color = $001A1B1E
+    Color = $001C1612
     object lbl_LastErr: TLabel
-      Left = 14
-      Top = 2
-      Width = 354
+      Left = 16
+      Top = 3
+      Width = 370
       Height = 14
       AutoSize = False
       EllipsisPosition = epEndEllipsis
       Caption = ''
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $006D6BFF
+      Font.Color = $005A60F0
       Font.Height = -10
       Font.Name = 'Consolas'
       Font.Style = []
       ParentFont = False
     end
   end
-  object pnl_Primary: TPanel
+  object pnl_KPIs: TPanel
     Left = 0
-    Top = 142
-    Width = 380
-    Height = 40
+    Top = 117
+    Width = 400
+    Height = 82
     Align = alTop
     BevelOuter = bvNone
-    Color = $001A1B1E
+    Color = $001C1612
+    object pnl_K1: TPanel
+      Left = 12
+      Top = 8
+      Width = 88
+      Height = 66
+      BevelOuter = bvNone
+      Color = $002B221B
+      object pnl_K1Bar: TPanel
+        Left = 0
+        Top = 0
+        Width = 88
+        Height = 2
+        BevelOuter = bvNone
+        Caption = ''
+        Color = $003B3026
+      end
+      object lbl_LblUp: TLabel
+        Left = 0
+        Top = 10
+        Width = 88
+        Height = 12
+        AutoSize = False
+        Alignment = taCenter
+        Caption = 'UPTIME'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00A5988B
+        Font.Height = -9
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+      object lbl_ValUp: TLabel
+        Left = 0
+        Top = 26
+        Width = 88
+        Height = 30
+        AutoSize = False
+        Alignment = taCenter
+        Caption = '0s'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00F3EDE6
+        Font.Height = -20
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+    end
+    object pnl_K2: TPanel
+      Left = 108
+      Top = 8
+      Width = 88
+      Height = 66
+      BevelOuter = bvNone
+      Color = $002B221B
+      object pnl_K2Bar: TPanel
+        Left = 0
+        Top = 0
+        Width = 88
+        Height = 2
+        BevelOuter = bvNone
+        Caption = ''
+        Color = $003B3026
+      end
+      object lbl_LblReq: TLabel
+        Left = 0
+        Top = 10
+        Width = 88
+        Height = 12
+        AutoSize = False
+        Alignment = taCenter
+        Caption = 'CALLS'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00A5988B
+        Font.Height = -9
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+      object lbl_ValReq: TLabel
+        Left = 0
+        Top = 26
+        Width = 88
+        Height = 30
+        AutoSize = False
+        Alignment = taCenter
+        Caption = '0'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00F3EDE6
+        Font.Height = -20
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+    end
+    object pnl_K3: TPanel
+      Left = 204
+      Top = 8
+      Width = 88
+      Height = 66
+      BevelOuter = bvNone
+      Color = $002B221B
+      object pnl_K3Bar: TPanel
+        Left = 0
+        Top = 0
+        Width = 88
+        Height = 2
+        BevelOuter = bvNone
+        Caption = ''
+        Color = $003B3026
+      end
+      object lbl_LblMs: TLabel
+        Left = 0
+        Top = 10
+        Width = 88
+        Height = 12
+        AutoSize = False
+        Alignment = taCenter
+        Caption = 'IN ALTIUM'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00A5988B
+        Font.Height = -9
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+      object lbl_ValMs: TLabel
+        Left = 0
+        Top = 26
+        Width = 88
+        Height = 30
+        AutoSize = False
+        Alignment = taCenter
+        Caption = '0s'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00F3EDE6
+        Font.Height = -20
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+    end
+    object pnl_K4: TPanel
+      Left = 300
+      Top = 8
+      Width = 88
+      Height = 66
+      BevelOuter = bvNone
+      Color = $002B221B
+      object pnl_K4Bar: TPanel
+        Left = 0
+        Top = 0
+        Width = 88
+        Height = 2
+        BevelOuter = bvNone
+        Caption = ''
+        Color = $003B3026
+      end
+      object lbl_LblStop: TLabel
+        Left = 0
+        Top = 10
+        Width = 88
+        Height = 12
+        AutoSize = False
+        Alignment = taCenter
+        Caption = 'AUTO-OFF'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00A5988B
+        Font.Height = -9
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+      object lbl_ValStop: TLabel
+        Left = 0
+        Top = 26
+        Width = 88
+        Height = 30
+        AutoSize = False
+        Alignment = taCenter
+        Caption = '10m'
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = $00A8C83C
+        Font.Height = -20
+        Font.Name = 'Segoe UI Semibold'
+        Font.Style = []
+        ParentFont = False
+      end
+    end
+  end
+  object pnl_Primary: TPanel
+    Left = 0
+    Top = 199
+    Width = 400
+    Height = 42
+    Align = alTop
+    BevelOuter = bvNone
+    Color = $001C1612
     object btn_OpenWeb: TPanel
       Left = 12
       Top = 6
-      Width = 356
-      Height = 28
+      Width = 376
+      Height = 30
       BevelOuter = bvNone
-      Caption = 'Open Dashboard  (waiting for MCP)'
-      Color = $0025262B
+      Caption = 'Open dashboard  (waiting for the server)'
+      Color = $002B221B
       Cursor = crDefault
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00696C73
+      Font.Color = $0073675C
       Font.Height = -12
       Font.Name = 'Segoe UI Semibold'
       Font.Style = []
@@ -300,23 +381,23 @@ object StatusForm: TStatusForm
   end
   object pnl_Controls: TPanel
     Left = 0
-    Top = 182
-    Width = 380
+    Top = 241
+    Width = 400
     Height = 70
     Align = alTop
     BevelOuter = bvNone
-    Color = $001A1B1E
+    Color = $001C1612
     object btn_Pause: TPanel
       Left = 12
       Top = 4
-      Width = 80
-      Height = 24
+      Width = 88
+      Height = 26
       BevelOuter = bvNone
       Caption = 'Pause'
-      Color = $002A2C32
+      Color = $00372C23
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00E1E2E6
+      Font.Color = $00F3EDE6
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -327,16 +408,16 @@ object StatusForm: TStatusForm
       OnMouseLeave = btn_PauseLeave
     end
     object btn_Renew: TPanel
-      Left = 96
+      Left = 108
       Top = 4
-      Width = 80
-      Height = 24
+      Width = 88
+      Height = 26
       BevelOuter = bvNone
-      Caption = 'Renew'
-      Color = $002A2C32
+      Caption = 'Keep alive'
+      Color = $00372C23
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00E1E2E6
+      Font.Color = $00F3EDE6
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -347,16 +428,16 @@ object StatusForm: TStatusForm
       OnMouseLeave = btn_RenewLeave
     end
     object btn_ClearLog: TPanel
-      Left = 180
+      Left = 204
       Top = 4
-      Width = 80
-      Height = 24
+      Width = 88
+      Height = 26
       BevelOuter = bvNone
-      Caption = 'Clear log'
-      Color = $002A2C32
+      Caption = 'Clear'
+      Color = $00372C23
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00E1E2E6
+      Font.Color = $00F3EDE6
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -367,16 +448,16 @@ object StatusForm: TStatusForm
       OnMouseLeave = btn_ClearLogLeave
     end
     object btn_Detach: TPanel
-      Left = 288
+      Left = 300
       Top = 4
-      Width = 80
-      Height = 24
+      Width = 88
+      Height = 26
       BevelOuter = bvNone
       Caption = 'Detach'
-      Color = $00B14545
+      Color = $002E2A5A
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00FFFFFF
+      Font.Color = $00B4B4FF
       Font.Height = -11
       Font.Name = 'Segoe UI Semibold'
       Font.Style = []
@@ -388,26 +469,27 @@ object StatusForm: TStatusForm
     end
     object lbl_FilterLabel: TLabel
       Left = 14
-      Top = 40
-      Width = 30
+      Top = 44
+      Width = 34
       Height = 14
-      Caption = 'filter'
+      AutoSize = False
+      Caption = 'Filter'
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $008B8E96
+      Font.Color = $00A5988B
       Font.Height = -10
-      Font.Name = 'Segoe UI'
-      Font.Style = [fsBold]
+      Font.Name = 'Segoe UI Semibold'
+      Font.Style = []
       ParentFont = False
     end
     object edt_Filter: TEdit
-      Left = 48
-      Top = 38
-      Width = 108
+      Left = 52
+      Top = 41
+      Width = 112
       Height = 20
       BorderStyle = bsNone
-      Color = $0025262B
+      Color = $002B221B
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00E1E2E6
+      Font.Color = $00F3EDE6
       Font.Height = -11
       Font.Name = 'Consolas'
       Font.Style = []
@@ -417,17 +499,17 @@ object StatusForm: TStatusForm
       OnChange = edt_FilterChange
     end
     object chk_HidePings: TPanel
-      Left = 162
-      Top = 40
-      Width = 70
+      Left = 172
+      Top = 42
+      Width = 74
       Height = 18
       BevelOuter = bvNone
       Alignment = taLeftJustify
       Caption = ' [x] pings'
-      Color = $001A1B1E
+      Color = $001C1612
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00C9CBD1
+      Font.Color = $00C9C2BA
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -438,17 +520,17 @@ object StatusForm: TStatusForm
       OnMouseLeave = chk_HidePingsLeave
     end
     object chk_OnlySlow: TPanel
-      Left = 236
-      Top = 40
-      Width = 80
+      Left = 248
+      Top = 42
+      Width = 82
       Height = 18
       BevelOuter = bvNone
       Alignment = taLeftJustify
       Caption = ' [ ] >100ms'
-      Color = $001A1B1E
+      Color = $001C1612
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00C9CBD1
+      Font.Color = $00C9C2BA
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -459,17 +541,17 @@ object StatusForm: TStatusForm
       OnMouseLeave = chk_OnlySlowLeave
     end
     object chk_OnTop: TPanel
-      Left = 320
-      Top = 40
-      Width = 56
+      Left = 332
+      Top = 42
+      Width = 60
       Height = 18
       BevelOuter = bvNone
       Alignment = taLeftJustify
       Caption = ' [x] pin'
-      Color = $001A1B1E
+      Color = $001C1612
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00C9CBD1
+      Font.Color = $00C9C2BA
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -482,24 +564,24 @@ object StatusForm: TStatusForm
   end
   object pnl_TabBar: TPanel
     Left = 0
-    Top = 252
-    Width = 380
-    Height = 26
+    Top = 311
+    Width = 400
+    Height = 28
     Align = alTop
     BevelOuter = bvNone
-    Color = $00202126
+    Color = $00221A15
     object tab_Log: TPanel
       Left = 12
       Top = 0
-      Width = 64
-      Height = 26
+      Width = 72
+      Height = 28
       BevelOuter = bvNone
       Alignment = taCenter
-      Caption = 'Log'
-      Color = $001A1B1E
+      Caption = 'Activity'
+      Color = $001C1612
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00FF9E4A
+      Font.Color = $003C8AE0
       Font.Height = -11
       Font.Name = 'Segoe UI Semibold'
       Font.Style = []
@@ -510,17 +592,17 @@ object StatusForm: TStatusForm
       OnMouseLeave = tab_LogLeave
     end
     object tab_Perf: TPanel
-      Left = 76
+      Left = 84
       Top = 0
-      Width = 64
-      Height = 26
+      Width = 72
+      Height = 28
       BevelOuter = bvNone
       Alignment = taCenter
-      Caption = 'Perf'
-      Color = $00202126
+      Caption = 'Timing'
+      Color = $00221A15
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $008B8E96
+      Font.Color = $00A5988B
       Font.Height = -11
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -531,15 +613,15 @@ object StatusForm: TStatusForm
       OnMouseLeave = tab_PerfLeave
     end
     object lbl_LogHint: TLabel
-      Left = 140
-      Top = 7
+      Left = 160
+      Top = 8
       Width = 228
       Height = 14
       AutoSize = False
       Alignment = taRightJustify
-      Caption = 'newest at top'
+      Caption = 'newest first'
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00696C73
+      Font.Color = $0073675C
       Font.Height = -10
       Font.Name = 'Segoe UI'
       Font.Style = []
@@ -548,14 +630,14 @@ object StatusForm: TStatusForm
   end
   object mmo_Log: TMemo
     Left = 0
-    Top = 278
-    Width = 380
-    Height = 342
+    Top = 339
+    Width = 400
+    Height = 307
     Align = alClient
     BorderStyle = bsNone
-    Color = $0017181B
+    Color = $00140F0C
     Font.Charset = DEFAULT_CHARSET
-    Font.Color = $00D4D4D4
+    Font.Color = $00DCD6D0
     Font.Height = -11
     Font.Name = 'Consolas'
     Font.Style = []
@@ -566,14 +648,14 @@ object StatusForm: TStatusForm
   end
   object mmo_Perf: TMemo
     Left = 0
-    Top = 278
-    Width = 380
-    Height = 342
+    Top = 339
+    Width = 400
+    Height = 307
     Align = alClient
     BorderStyle = bsNone
-    Color = $0017181B
+    Color = $00140F0C
     Font.Charset = DEFAULT_CHARSET
-    Font.Color = $00D4D4D4
+    Font.Color = $00DCD6D0
     Font.Height = -11
     Font.Name = 'Consolas'
     Font.Style = []
@@ -585,51 +667,52 @@ object StatusForm: TStatusForm
   end
   object pnl_Footer: TPanel
     Left = 0
-    Top = 620
-    Width = 380
-    Height = 30
+    Top = 646
+    Width = 400
+    Height = 34
     Align = alBottom
     BevelOuter = bvNone
-    Color = $0017181B
+    Color = $002B221B
     object lbl_FooterHint: TLabel
-      Left = 12
-      Top = 3
-      Width = 356
-      Height = 11
+      Left = 14
+      Top = 4
+      Width = 280
+      Height = 12
       AutoSize = False
-      Caption = 'Run standalone (no AI needed):'
+      Caption = 'Dashboard without an AI client:'
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00696C73
+      Font.Color = $0073675C
       Font.Height = -9
       Font.Name = 'Segoe UI'
       Font.Style = []
       ParentFont = False
     end
     object lbl_LaunchCmd: TLabel
-      Left = 12
-      Top = 14
-      Width = 280
-      Height = 13
+      Left = 14
+      Top = 17
+      Width = 290
+      Height = 14
       AutoSize = False
+      EllipsisPosition = epEndEllipsis
       Caption = 'python -m altium_agent.server dashboard --port 8766'
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00D4D4D4
-      Font.Height = -11
+      Font.Color = $00C9C2BA
+      Font.Height = -10
       Font.Name = 'Consolas'
       Font.Style = []
       ParentFont = False
     end
     object btn_CopyCmd: TPanel
-      Left = 300
-      Top = 6
-      Width = 68
-      Height = 20
+      Left = 316
+      Top = 7
+      Width = 72
+      Height = 22
       BevelOuter = bvNone
       Caption = 'Copy'
-      Color = $002A2C32
+      Color = $00372C23
       Cursor = crHandPoint
       Font.Charset = DEFAULT_CHARSET
-      Font.Color = $00E1E2E6
+      Font.Color = $00F3EDE6
       Font.Height = -10
       Font.Name = 'Segoe UI'
       Font.Style = []

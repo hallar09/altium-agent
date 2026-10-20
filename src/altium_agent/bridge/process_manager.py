@@ -217,7 +217,7 @@ class AltiumProcessManager:
     #: The process owning a window with this caption is, by construction,
     #: the one running the script. Must match the Caption in
     #: scripts/altium/StatusForm.dfm; a test holds the two together.
-    STATUS_FORM_TITLE = "Altium Agent MCP"
+    STATUS_FORM_TITLE = "Altium Agent"
 
     def _candidates(self) -> list[AltiumProcessInfo]:
         """Every Altium process, in enumeration order. The slow path:

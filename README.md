@@ -87,7 +87,7 @@ a stale deployment from a current one.
 
 Then attach the bridge once per Altium session: in Altium, **File > Run
 Script... > browse to `AltiumAgent.PrjScr` > `Dispatcher.pas` > StartMCPServer
-> Run**. A small "Altium Agent MCP" status window appears. Check everything
+> Run**. A small "Altium Agent" status window appears (copper wordmark, status line, tiles, activity log). Check everything
 with:
 
 ```powershell

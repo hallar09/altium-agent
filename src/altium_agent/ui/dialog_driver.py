@@ -55,10 +55,22 @@ _ROLES = {
                 "siguiente", "continuar", "finalizar", "aceptar"),
     "dismiss": ("close", "cancel", "no", "cerrar"),
     "report": ("report changes", "report"),
+    # Altium Agent: the DRC dialogs. "Repour Polygons and Run DRC"
+    # carries both phrases; the longer "repour polygons" wins, so it is
+    # never mistaken for the plain "Run DRC".
+    "run_check": ("run drc", "run design rule check"),
+    "repour": ("repour polygons", "repour"),
 }
 
 #: Roles that change the design. Never pressed without explicit consent.
-COMMITTING = ("commit",)
+#: A repour rebuilds the copper of every polygon it touches.
+COMMITTING = ("commit", "repour")
+
+#: How DRC's polygon prompt may be answered (``drc_pours``):
+#: ``ask`` leaves it for a person, ``run_as_is`` runs DRC on the pours as
+#: they are (a modified pour then shows up as a violation), ``repour``
+#: repours first, which changes copper and therefore needs allow_commit.
+DRC_POUR_CHOICES = ("ask", "run_as_is", "repour")
 
 #: Advance actions from LEAST final to MOST final.
 #:
@@ -139,7 +151,8 @@ def buttons_by_role(dialog: dict) -> dict:
 
 
 def decide(dialog: dict, intent: str, allow_commit: bool,
-           already_pressed: set, allow_confirm: bool = False) -> tuple:
+           already_pressed: set, allow_confirm: bool = False,
+           drc_run: bool = False, drc_pours: str = "ask") -> tuple:
     """Choose what to press. Returns (caption, why) or (None, why).
 
     Decisions come from the dialog's KIND and the roles it offers, never
@@ -148,6 +161,10 @@ def decide(dialog: dict, intent: str, allow_commit: bool,
     """
     kind = dialog.get("kind")
     roles = buttons_by_role(dialog)
+
+    if kind in ("drc_setup", "drc_pour_prompt"):
+        return _decide_drc(kind, roles, intent, allow_commit, already_pressed,
+                           drc_run, drc_pours)
 
     if kind == "confirm" and intent == "proceed" and allow_confirm:
         # A confirmation that merely asks whether to carry on IS the
@@ -254,6 +271,45 @@ def decide(dialog: dict, intent: str, allow_commit: bool,
                   f"this knows how to press")
 
 
+def _decide_drc(kind: str, roles: dict, intent: str, allow_commit: bool,
+                already_pressed: set, drc_run: bool, drc_pours: str) -> tuple:
+    """The two dialogs a DRC run raises, answered only as authorised."""
+    if intent == "cancel":
+        caption = _first(roles, "dismiss")
+        return (caption, "backing out as asked") if caption else (
+            None, "asked to back out, but nothing dismisses this")
+    if kind == "drc_setup":
+        if not drc_run:
+            return None, ("the Design Rule Checker is waiting; this run was "
+                          "not authorised to start it")
+        if "run_check" in already_pressed:
+            caption = _first(roles, "dismiss")
+            return caption, "the check has run, closing the checker"
+        caption = _first(roles, "run_check")
+        if caption:
+            return caption, "running the design rule check as asked"
+        return None, "the Design Rule Checker offers no Run button"
+    # drc_pour_prompt
+    if drc_pours == "run_as_is":
+        caption = _first(roles, "run_check")
+        if caption:
+            return caption, ("running DRC on the pours as they are, as asked "
+                             "(no repour, the copper is not changed)")
+        return None, "the polygon prompt offers no plain Run DRC button"
+    if drc_pours == "repour":
+        if not allow_commit:
+            return None, ("repouring rebuilds polygon copper, which changes "
+                          "the design. Re-run with commit authorised if that "
+                          "is what you want")
+        caption = _first(roles, "repour")
+        if caption:
+            return caption, "repouring the polygons, then running DRC, as asked"
+        return None, "the polygon prompt offers no repour button"
+    return None, ("DRC is asking whether to repour shelved or modified "
+                  "polygons. Choose drc_pours='run_as_is' or 'repour', or "
+                  "answer it in Altium")
+
+
 def _first(roles: dict, role: str):
     values = roles.get(role) or []
     if not values:
@@ -283,7 +339,9 @@ def _least_final(captions: list):
 def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
           allow_confirm: bool = False, wait_first: float = 30.0,
           dry_run: bool = True, budget: float = 300.0,
-          max_presses: int = 40, settle: float = 0.3) -> dict:
+          max_presses: int = 40, settle: float = 0.3,
+          drc_run: bool = False, drc_pours: str = "ask",
+          linger: float = 0.0) -> dict:
     """Answer dialogs until none is left, the goal is met, or it stops.
 
     Args:
@@ -297,6 +355,12 @@ def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
             hold this forever.
         max_presses: a backstop against a dialog that reappears
             unchanged after every press.
+        drc_run, drc_pours: how to answer the Design Rule Checker and
+            its polygon prompt (see DRC_POUR_CHOICES). Off by default.
+        linger: after a press, keep watching this long for the next
+            dialog before calling the sequence finished. An operation
+            that raises two dialogs in turn (DRC's polygon prompt, then
+            the checker) needs it; the default 0 keeps the old exit.
 
     Returns:
         A record of every observation and decision, plus ``committed``,
@@ -317,6 +381,10 @@ def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
     first_deadline = time.monotonic() + wait_first
     finished = None
     needs_human = False
+    last_press = 0.0
+    if drc_pours not in DRC_POUR_CHOICES:
+        return {"ok": False, "reason": f"drc_pours must be one of {DRC_POUR_CHOICES}",
+                "steps": []}
 
     while True:
         if time.monotonic() > deadline:
@@ -348,6 +416,9 @@ def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
             # exiting on the first empty look is a race that reports
             # "nothing to do" while the work is still starting. AFTER a
             # press it genuinely means the sequence finished.
+            if steps and linger and time.monotonic() < last_press + linger:
+                time.sleep(settle)
+                continue
             if steps or time.monotonic() >= first_deadline:
                 finished = ("no dialog is open" if steps else
                             f"no dialog appeared within {wait_first:g}s")
@@ -360,7 +431,8 @@ def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
                       open_dialogs[0])
         seen = pressed_per_window.setdefault(dialog["hwnd"], set())
         caption, why = decide(dialog, intent, allow_commit, seen,
-                              allow_confirm=allow_confirm)
+                              allow_confirm=allow_confirm,
+                              drc_run=drc_run, drc_pours=drc_pours)
 
         record = {
             "title": dialog["title"],
@@ -378,7 +450,8 @@ def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
                 continue
             record["action"] = "stopped"
             steps.append(record)
-            needs_human = dialog["needs_a_human"] or dialog["kind"] == "unknown"
+            needs_human = (dialog["needs_a_human"]
+                           or dialog["kind"] in ("unknown", "drc_setup", "drc_pour_prompt"))
             finished = why
             break
 
@@ -401,6 +474,7 @@ def drive(pid: int, intent: str = "proceed", allow_commit: bool = False,
 
         win.click(button)
         presses += 1
+        last_press = time.monotonic()
         seen.add(role)
         if role in COMMITTING:
             committed = True

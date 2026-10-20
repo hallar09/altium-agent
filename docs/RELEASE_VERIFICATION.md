@@ -31,6 +31,8 @@ afterwards (`python scripts/gen_tool_reference.py`).
 | A8 | `lib_rename_footprint`, `lib_copy_footprint`, `lib_move_footprints`, `lib_delete_footprint` | each does what it says on the copy; no open command afterwards |
 | A9 | `obj_highlight_net`, `obj_clear_highlights` | the net highlights and clears |
 | A10 | `analyze_drc_report` | on the report Altium wrote for the copy, the counts per rule match the report's summary table |
+| A11 | `pcb_run_drc` with `answer_dialogs=True` | on a copy with one polygon shelved: `drc_pours="ask"` stops at the polygon prompt and reports it; `drc_pours="run_as_is"` presses Run DRC, then Run and Close on the checker, and `drc_confirmed` is true. Record the exact captions seen in `dialogs.steps` |
+| A12 | `analyze_sch_pcb_sync`, `pcb_read_summary`, `analyze_board_review` | on a copy of Kame_FMU: 158 nets match and the summary agrees with Altium's Board Information; these are `offline` and need no record, but say if they disagree with Altium |
 
 Steps A6 to A9 exercise the handlers whose PreProcess/PostProcess pairs
 Altium Agent wrapped in Try/Finally.

@@ -850,45 +850,73 @@ def register_pcb_tools(mcp):
             "pcb.get_clearance_violations", params, timeout=90.0)
 
     @mcp.tool()
-    async def pcb_run_drc(allow_modal: bool = False) -> dict[str, Any]:
-        """Run Design Rule Check on the active PCB. MODAL: BLOCKS THE BRIDGE
-        until a human closes Altium's DRC dialog (no parameter avoids it),
-        so it refuses unless ``allow_modal=True``. PREFER
+    async def pcb_run_drc(allow_modal: bool = False,
+                          answer_dialogs: bool = False,
+                          drc_pours: str = "ask",
+                          allow_repour: bool = False) -> dict[str, Any]:
+        """Run Design Rule Check on the active PCB. MODAL: Altium's Design
+        Rule Checker dialog BLOCKS THE BRIDGE until it is answered, so this
+        refuses unless ``allow_modal=True``. PREFER
         pcb_get_clearance_violations, which reads stored violations and
-        cannot block. Don't run it on a board with no tracks yet.
+        cannot block, and read the HTML report with analyze_drc_report.
+        Don't run it on a board with no tracks yet.
+
+        With ``answer_dialogs=True`` the dialog driver answers the checker
+        (presses Run, then Close) while the bridge waits, so no human is
+        needed. A board with shelved or modified polygons first asks
+        whether to repour; ``drc_pours`` decides: ``ask`` (default) leaves
+        that prompt for a person, ``run_as_is`` runs DRC on the pours as
+        they are, ``repour`` repours first, which changes copper and also
+        needs ``allow_repour=True``.
 
         ``drc_confirmed`` is true only if the .DRC report was rewritten
         by this call; a cancelled dialog leaves an older report.
 
         Args:
-            allow_modal: True means a human is there to close the dialog.
+            allow_modal: accept that the call raises a modal dialog.
                 Default False refuses without touching Altium.
+            answer_dialogs: let the dialog driver answer the DRC dialogs.
+            drc_pours: ask | run_as_is | repour (see above).
+            allow_repour: permit the repour, which changes the design.
 
         Returns:
             ``violation_count`` (all), ``drc_triggered``,
             ``drc_confirmed`` and ``violations`` (first 100): name,
             description, rule, x_mils, y_mils, layer, and ``primitive1``
             / ``primitive2`` {detail, type, net, layer, x_mils, y_mils}
-            (primitive2 empty for single-object rules). Refused:
-            {ok: False, reason}.
+            (primitive2 empty for single-object rules); with
+            answer_dialogs, ``dialogs`` (what was on screen and what was
+            pressed). Refused: {ok: False, reason}.
         """
         if not allow_modal:
             return {
                 "ok": False,
                 "reason": (
                     "pcb_run_drc opens Altium's MODAL Design Rule Checker "
-                    "dialog and blocks the whole bridge until a human "
-                    "closes it (observed: 30+ min dead loop, client "
+                    "dialog and blocks the whole bridge until it is "
+                    "answered (observed: 30+ min dead loop, client "
                     "timeout). Refusing by default. Use "
                     "pcb_get_clearance_violations to read the violations "
-                    "already on the board, or pass allow_modal=True if a "
-                    "human is at the keyboard to dismiss the dialog."),
+                    "already on the board, pass allow_modal=True if a "
+                    "human is at the keyboard, or add answer_dialogs=True "
+                    "to let the dialog driver answer it."),
                 "drc_triggered": False,
             }
+        from ..ui.dialog_driver import DRC_POUR_CHOICES
+
+        if drc_pours not in DRC_POUR_CHOICES:
+            return {"ok": False, "drc_triggered": False,
+                    "reason": f"drc_pours must be one of {list(DRC_POUR_CHOICES)}"}
+        if drc_pours == "repour" and not allow_repour:
+            return {"ok": False, "drc_triggered": False,
+                    "reason": ("drc_pours='repour' rebuilds polygon copper, which "
+                               "changes the design; pass allow_repour=True to "
+                               "permit it, or use drc_pours='run_as_is'")}
         bridge = get_bridge()
-        result = await bridge.send_command_async(
-            "pcb.run_drc", {"allow_modal": "true"})
-        return result
+        if not answer_dialogs:
+            return await bridge.send_command_async(
+                "pcb.run_drc", {"allow_modal": "true"})
+        return await _run_drc_answering_dialogs(bridge, drc_pours, allow_repour)
 
     @mcp.tool()
     async def pcb_get_components() -> dict[str, Any]:
@@ -5950,3 +5978,38 @@ def register_pcb_tools(mcp):
                 "layer": layer,
             },
         )
+
+
+async def _run_drc_answering_dialogs(bridge, drc_pours: str, allow_repour: bool) -> dict[str, Any]:
+    """Send pcb.run_drc and, at the same time, drive the dialogs it raises.
+
+    The bridge call blocks while the checker is modal, so the driver runs
+    in a worker thread beside it, reading windows through Win32 (which
+    still answers while the scripting engine is held). The driver only
+    presses what was authorised: Run and Close on the checker, the plain
+    Run DRC on the polygon prompt for run_as_is, the repour button only
+    with allow_repour.
+    """
+    import asyncio
+
+    from ..tools.uiauto import _altium_pid
+    from ..ui import dialog_driver
+
+    pid, problem = _altium_pid()
+    if problem:
+        return {**problem, "drc_triggered": False}
+    loop = asyncio.get_running_loop()
+    driver = loop.run_in_executor(None, lambda: dialog_driver.drive(
+        pid, intent="proceed", allow_commit=allow_repour, dry_run=False,
+        wait_first=30.0, budget=900.0, drc_run=True, drc_pours=drc_pours,
+        linger=4.0))
+    result = await bridge.send_command_async("pcb.run_drc", {"allow_modal": "true"},
+                                             timeout=960.0)
+    dialogs = await driver
+    out = dict(result) if isinstance(result, dict) else {"result": result}
+    out["dialogs"] = dialogs
+    if dialogs.get("stopped_for_a_human"):
+        out["ok"] = False
+        out["reason"] = ("a DRC dialog was left for a person: "
+                         + str(dialogs.get("finished")))
+    return out

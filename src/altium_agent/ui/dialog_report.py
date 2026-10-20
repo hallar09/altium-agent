@@ -40,6 +40,15 @@ from . import windows as win
 #: Every pattern here was measured on a real dialog during the session
 #: that motivated this module, except where noted as conventional.
 _KINDS = (
+    # Altium Agent, from BoardKit's field notes (NOT yet measured by this
+    # code; RELEASE_VERIFICATION Part A records it): DRC on a board with
+    # shelved or modified polygons first asks whether to repour, offering
+    # "Repour Polygons and Run DRC" and "Run DRC". Matched before
+    # ``confirm`` because the prompt is a question.
+    ("drc_pour_prompt", (r"repour polygons and run drc", r"shelved polygon",
+                         r"polygons?\b.*\b(need|needs) (to be )?repour")),
+    # The Design Rule Checker setup dialog that PCB:DesignRuleCheck opens.
+    ("drc_setup", (r"design rule checker",)),
     ("nothing_to_do", (r"no differences",
                        r"nothing to (do|update)")),
     ("engineering_change_order", (r"engineering change order",)),

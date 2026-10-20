@@ -18,7 +18,7 @@ board. Items marked **open** are not handled yet.
 | A script that fails to compile stays paused ("another instance is busy"). | `app_diagnose` reports `SCRIPT_HALTED` (bridge window present, not polling): Run > Stop, close the script tab, start the bridge again. |
 | One bridge at a time: two tools driving Altium at once collide. | One transport: the persistent polling bridge with a fair queue between Claude sessions. Do not run altium-mcp or BoardKit live calls while Altium Agent is attached. |
 | Import Changes (ECO) needs one click on Execute Changes, then Close. | Inherited dialog driver answers it when the caller allows modal tools; the tool is badged `modal`. |
-| **open**: DRC with shelved or modified pours opens "Repour Polygons and Run DRC / Run DRC" and the DRC call times out. | `pcb_run_drc` refuses without `allow_modal=True`. Answering this prompt from the dialog driver is phase (b) work; until then answer it in Altium. The report still lands on disk and `analyze_drc_report` reads it. |
+| DRC with shelved or modified pours opens "Repour Polygons and Run DRC / Run DRC", and the Design Rule Checker itself is modal; the DRC call times out. | `pcb_run_drc(allow_modal=True, answer_dialogs=True)` lets the dialog driver press Run and Close on the checker while the bridge waits. The polygon prompt is answered only as told: `drc_pours="run_as_is"` presses the plain Run DRC, `drc_pours="repour"` repours first and also needs `allow_repour=True` because it changes copper; the default leaves it for a person and says so. **Not yet live-verified**: the dialog captions come from BoardKit's notes, and RELEASE_VERIFICATION A11 checks them. The report lands on disk either way and `analyze_drc_report` reads it. |
 
 ## DelphiScript
 

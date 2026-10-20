@@ -428,6 +428,36 @@ def _emit_sheet_size(
             f"document default")
 
 
+#: What a full redraw removes from a sheet it reuses: the parts and their
+#: copper. Everything the emitter draws is one of these.
+_REDRAW_TYPES = ("eSchComponent",) + _COPPER_TYPES
+
+
+def _clear_sheet(sheet_name: str, bridge: Any, result: EmitResult) -> bool:
+    """Delete the active sheet's parts and copper before a full redraw.
+
+    Returns False (and records a failure) when a delete raises, so the
+    caller stops instead of drawing a duplicate set over what is left.
+    """
+    for object_type in _REDRAW_TYPES:
+        try:
+            bridge.send_command("generic.delete_objects", {
+                "scope": "active_doc", "object_type": object_type,
+                "filter": ""})
+        except Exception as exc:                # noqa: BLE001
+            result.ok = False
+            result.failures.append(EmitFailure(
+                refdes="", code="CLEAR_FAILED",
+                reason=f"clearing {object_type} on {sheet_name} before the "
+                       f"redraw raised: {exc}; nothing was drawn, so the "
+                       f"sheet holds no duplicate"))
+            return False
+    result.notes.append(
+        f"sheet {sheet_name}: existing parts and wiring cleared for a full "
+        f"redraw")
+    return True
+
+
 def _emit_sheet(
     canvas: SchematicCanvas,
     sheet_name: str,
@@ -438,6 +468,7 @@ def _emit_sheet(
     parameter_stamps: Optional[dict[str, dict[str, str]]] = None,
 ) -> None:
     """Emit one sheet's worth of components, wires, labels, ports, junctions."""
+    reused = _sheet_path(project, sheet_name).exists()
     sheet_path = _ensure_sheet_loaded(project, sheet_name, bridge, result)
     if sheet_path is None:
         return
@@ -448,6 +479,14 @@ def _emit_sheet(
         result.sheets_emitted.append(sheet_name)
     except Exception as exc:
         result.notes.append(f"set_active_document {sheet_name} failed: {exc}")
+        return
+
+    # A FULL EMIT ONTO A SHEET THAT EXISTS REDRAWS IT. It used to place
+    # every part again on top of what was there, so a second full run
+    # (mode="full", or "auto" after a run whose snapshot was not written)
+    # left every designator twice. Clear the sheet first; if that fails,
+    # draw nothing rather than a second copy.
+    if reused and not _clear_sheet(sheet_name, bridge, result):
         return
 
     _emit_sheet_size(canvas, sheet_name, bridge, result)

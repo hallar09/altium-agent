@@ -229,6 +229,32 @@ def bad_filter(cond: str, **extra: Any) -> dict[str, Any]:
                      f"not understood.{hint} Nothing was sent.", **extra}
 
 
+
+async def _name_the_document_when_nothing_matched(bridge, scope, result) -> None:
+    """On matched 0 in the active document, say which document that was.
+
+    A schematic type run while a PCB, or another sheet, is active matches
+    nothing, which reads as "this type name is wrong". Seen in the
+    MacroStick run: eSchComponent and eWire both matched 0 on a sheet with
+    104 parts and 380 wires.
+    """
+    if scope != "active_doc" or not isinstance(result, dict):
+        return
+    if result.get("matched") not in (0, "0"):
+        return
+    try:
+        doc = await bridge.send_command_async("application.get_active_document")
+    except Exception:                           # noqa: BLE001
+        return
+    if isinstance(doc, dict):
+        name = doc.get("file_path") or doc.get("path") or doc.get("name") or ""
+        kind = doc.get("kind") or doc.get("document_kind") or ""
+        result["active_document"] = name
+        result["note"] = (
+            f"Nothing matched in the active document ({kind} {name}). If the "
+            f"objects are on another document, activate it first "
+            f"(app_set_active_document) or pass scope='doc:<path>'.").replace("( ", "(")
+
 def register_generic_tools(mcp):
     """Register generic primitive tools with the MCP server."""
 
@@ -504,6 +530,7 @@ def register_generic_tools(mcp):
                 "filter": filter,
             },
         )
+        await _name_the_document_when_nothing_matched(bridge, scope, result)
         hint = BulkHintTracker.record_and_hint("obj_delete")
         if hint and isinstance(result, dict):
             result["_hint_bulk"] = hint

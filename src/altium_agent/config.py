@@ -15,12 +15,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("altium_agent.config")
 from pydantic import BaseModel, Field
-from altium_agent.atomicfile import replace_with_retry
 
+from altium_agent.atomicfile import replace_with_retry
 
 # Pointer file that the DelphiScript reads to find the workspace dir.
 # DelphiScript can't read environment variables, so Python writes the
@@ -247,8 +246,10 @@ class AltiumConfig(BaseModel):
         if the schema files are missing.
         """
         try:
-            from .schemas import write_schemas_to
-            from .schemas import commands  # noqa: F401  (registers commands)
+            from .schemas import (
+                commands,  # noqa: F401  (registers commands)
+                write_schemas_to,
+            )
             write_schemas_to(self.workspace_dir)
         except Exception:
             # Schema export must not break MCP server startup.
@@ -338,39 +339,3 @@ def configure(**kwargs) -> None:
 # it runs as a separate process from a jar the user installed. Both paths
 # are overridable; the defaults are where altium-mcp-pro installed them.
 # ---------------------------------------------------------------------------
-
-FREEROUTING_JAR_ENV = "ALTIUM_AGENT_FREEROUTING_JAR"
-JAVA_ENV = "ALTIUM_AGENT_JAVA"
-
-
-def freerouting_paths(home: Optional[Path] = None) -> tuple[Optional[Path], Optional[Path]]:
-    """(jar, java) for Freerouting, or None for whichever is not found.
-
-    Java is looked for beside the jar's bundled JRE first, because on the
-    reference machine it is not on PATH.
-    """
-    import glob
-    import shutil
-
-    home = home or Path(os.environ.get("USERPROFILE") or Path.home())
-    jar_env = os.environ.get(FREEROUTING_JAR_ENV)
-    if jar_env:
-        jar: Optional[Path] = Path(jar_env)
-    else:
-        found = sorted(glob.glob(str(home / ".altium-mcp" / "freerouting"
-                                     / "freerouting-*.jar")))
-        jar = Path(found[-1]) if found else None
-
-    java_env = os.environ.get(JAVA_ENV)
-    if java_env:
-        java: Optional[Path] = Path(java_env)
-    else:
-        exe = "java.exe" if sys.platform == "win32" else "java"
-        bundled = sorted(glob.glob(str(home / ".altium-mcp" / "freerouting"
-                                       / "jre" / "*" / "bin" / exe)))
-        if bundled:
-            java = Path(bundled[-1])
-        else:
-            which = shutil.which("java")
-            java = Path(which) if which else None
-    return jar, java

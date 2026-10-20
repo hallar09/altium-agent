@@ -16,8 +16,8 @@ any naming scheme.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from altium_agent.diag.checks import Check, Severity, Status
 from altium_agent.diag.health import run_health_checks
@@ -73,7 +73,7 @@ def _altium_process_running() -> Check:
     )
 
 
-def _ping_altium() -> Optional[dict]:
+def _ping_altium() -> dict | None:
     """Send a ping. Returns the response dict, or None on any failure."""
     try:
         from altium_agent.bridge import get_bridge
@@ -83,7 +83,7 @@ def _ping_altium() -> Optional[dict]:
         return None
 
 
-def _check_script_responsive(ping: Optional[dict]) -> Check:
+def _check_script_responsive(ping: dict | None) -> Check:
     if ping is None:
         return Check(
             name="DelphiScript polling loop responsive",
@@ -101,7 +101,7 @@ def _check_script_responsive(ping: Optional[dict]) -> Check:
     )
 
 
-def _check_script_version_match(ping: Optional[dict]) -> Check:
+def _check_script_version_match(ping: dict | None) -> Check:
     if ping is None:
         return Check(
             name="script version match",
@@ -198,26 +198,31 @@ def _check_self_heal() -> list[Check]:
 
 
 def _check_freerouting() -> list[Check]:
-    """Freerouting is optional and external (GPL, never vendored)."""
-    from altium_agent.config import freerouting_paths
-    jar, java = freerouting_paths()
-    checks = []
-    checks.append(Check(
-        name="freerouting jar",
-        status=Status.PASS if jar and jar.is_file() else Status.WARN,
-        message=str(jar) if jar else "not configured",
-        fix=("Optional. Set ALTIUM_AGENT_FREEROUTING_JAR to a "
-             "freerouting-*.jar if a project's routing policy allows "
-             "third-party engines."),
-        severity=Severity.MINOR))
-    checks.append(Check(
-        name="java for freerouting",
-        status=Status.PASS if java and java.is_file() else Status.WARN,
-        message=str(java) if java else "not found",
-        fix=("Optional. Set ALTIUM_AGENT_JAVA to java.exe (it need not be "
-             "on PATH)."),
-        severity=Severity.MINOR))
-    return checks
+    """Freerouting is optional and external (GPL, never vendored).
+
+    The same lookup the routing broker uses (routing/freerouting.py), so the
+    doctor and route_engines never disagree about which one would run.
+    """
+    from altium_agent.routing.freerouting import find, search_dirs
+
+    f = find()
+    if f is None:
+        return [Check(
+            name="freerouting",
+            status=Status.WARN,
+            message="not installed",
+            fix=("Optional. Install Freerouting yourself (GPL-3.0, not shipped) and set "
+                 "ALTIUM_AGENT_FREEROUTING to its jar or native build, or put it under "
+                 + " or ".join(str(x) for x in search_dirs()) + "."),
+            severity=Severity.MINOR)]
+    detail = f.path + (f" (Java {f.java_major} at {f.java})" if f.kind == "jar" else " (native)")
+    return [Check(
+        name="freerouting",
+        status=Status.PASS if f.usable else Status.WARN,
+        message=detail if f.usable else "; ".join(f.problems),
+        fix=("Optional. Set ALTIUM_AGENT_JAVA to a Java "
+             f"{f.needs_java or ''} runtime (it need not be on PATH)." if not f.usable else ""),
+        severity=Severity.MINOR)]
 
 
 def _check_lib_paths(library_paths: Sequence[str]) -> list[Check]:
@@ -298,7 +303,7 @@ def _check_lib_paths(library_paths: Sequence[str]) -> list[Check]:
     return checks
 
 
-def run_doctor_checks(library_paths: Optional[Sequence[str]] = None) -> list[Check]:
+def run_doctor_checks(library_paths: Sequence[str] | None = None) -> list[Check]:
     """Compose health + Altium-side preflight."""
     checks: list[Check] = []
 

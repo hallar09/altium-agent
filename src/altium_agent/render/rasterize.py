@@ -13,6 +13,7 @@ browser is found or the shot fails, the caller still has the SVG.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -71,6 +72,9 @@ def find_browser(explicit: Optional[str] = None) -> Optional[str]:
     """Return a usable Chromium-family executable path, or None."""
     if explicit and Path(explicit).exists():
         return explicit
+    env = os.environ.get("ALTIUM_AGENT_BROWSER")  # Altium Agent: a browser of the user's choosing
+    if env and Path(env).exists():
+        return env
     for cand in _EDGE_CANDIDATES:
         if Path(cand).exists():
             return cand
@@ -135,6 +139,9 @@ def rasterize_svg(
 
     cmd = build_screenshot_cmd(browser, str(svg.resolve()), png_path,
                                int(width), int(height))
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        # Altium Agent: Chromium refuses to run as root (containers) with its sandbox on.
+        cmd.insert(1, "--no-sandbox")
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except Exception as exc:  # subprocess timeout / OS error

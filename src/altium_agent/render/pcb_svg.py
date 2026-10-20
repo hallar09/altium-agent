@@ -284,6 +284,11 @@ def render_pcb_svg(geometry: dict[str, Any],
     if opt.show_drills:
         pieces.append(_render_drills(geometry, opt))
 
+    # Altium Agent: a review layer (ratsnest, numbered findings) on top.
+    if geometry.get("review"):
+        from .file_geometry import review_overlay_svg
+        pieces.append(review_overlay_svg(geometry["review"], flip_y=opt.flip_y, bottom=bottom_view))
+
     if bottom_view:
         pieces.append("</g>")  # close X-mirror wrapper
     if opt.flip_y:

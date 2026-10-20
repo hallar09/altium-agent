@@ -60,6 +60,9 @@ KIND_ARTIFACT = "artifact"
 KIND_BLOCKED = "blocked"
 KIND_RESOLVED = "resolved"
 KIND_NOTE = "note"
+# Altium Agent: the design was put back to the checkpoint taken when this stage
+# was entered; this stage and every later one are open again.
+KIND_REWIND = "rewind"
 
 
 @dataclass
@@ -158,6 +161,13 @@ class SessionJournal:
             payload["data"] = data
         return self._append(KIND_NOTE, payload, now=now)
 
+    def rewind(self, stage: str, *, checkpoint_id: str = "", safety_checkpoint_id: str = "",
+               now=None) -> JournalEvent:
+        """Record that the design went back to the start of ``stage``."""
+        _check_stage(stage)
+        return self._append(KIND_REWIND, {"stage": stage, "checkpoint_id": checkpoint_id,
+                                          "safety_checkpoint_id": safety_checkpoint_id}, now=now)
+
     # --- reading ---------------------------------------------------------
     def _raw_lines(self):
         if not self.path.exists():
@@ -219,6 +229,12 @@ def _replay(session_id: str, events: list[JournalEvent]) -> SessionState:
         elif ev.kind == KIND_BLOCKED:
             open_question = p.get("question")
         elif ev.kind == KIND_RESOLVED:
+            open_question = None
+        elif ev.kind == KIND_REWIND and p.get("stage") in STAGES:
+            cut = STAGES.index(p["stage"])
+            for st in STAGES[cut:]:
+                stage_status.pop(st, None)
+            current_stage = p["stage"]
             open_question = None
 
     # next_stage: first pipeline stage not yet marked ok.

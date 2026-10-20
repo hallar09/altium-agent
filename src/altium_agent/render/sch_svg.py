@@ -119,6 +119,10 @@ def render_sch_svg(geometry: dict[str, Any],
     pieces.append(_render_net_labels(geometry.get("net_labels") or [], opt))
     pieces.append(_render_ports(geometry.get("ports") or [], opt))
     pieces.append(_render_power_ports(geometry.get("power_ports") or [], opt))
+    # Altium Agent: a review layer (numbered findings) on top.
+    if geometry.get("review"):
+        from .file_geometry import review_overlay_svg
+        pieces.append(review_overlay_svg(geometry["review"], flip_y=opt.flip_y))
     if opt.flip_y:
         pieces.append("</g>")  # close the Y-flip wrapper opened in the root
     pieces.append("</svg>")

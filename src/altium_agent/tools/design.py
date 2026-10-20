@@ -218,7 +218,8 @@ def register_design_tools(mcp) -> None:
         return store.active()
 
     @mcp.tool()
-    async def design_session_start(requirement: str, session_id: str = "") -> dict[str, Any]:
+    async def design_session_start(requirement: str, session_id: str = "", project: str = "",
+                                   profile: str = "") -> dict[str, Any]:
         """Open a durable design-session journal for an autonomous run.
 
         The journal is append-only state that survives context compaction,
@@ -230,12 +231,21 @@ def register_design_tools(mcp) -> None:
         Args:
             requirement: the design requirement text this run implements.
             session_id: optional explicit id; defaults to a timestamp.
+            project: the .PrjPcb this run builds (Altium Agent): every
+                stage_enter then checkpoints its folder, and design_status,
+                design_gate_review and design_undo_to_stage find it.
+            profile: a house-style profile name or path (ref_profile) that
+                design_status and the gate reviews compare against.
 
         Returns:
             ``{"session_id": ..., "state": {...}}``.
         """
         store = _session_store()
         journal = store.start(requirement, session_id=session_id or None)
+        if project.strip():
+            journal.artifact(project.strip(), kind="project")
+        if profile.strip():
+            journal.artifact(profile.strip(), kind="profile")
         return {"session_id": journal.session_id, "state": asdict(journal.state())}
 
     @mcp.tool()
@@ -282,9 +292,18 @@ def register_design_tools(mcp) -> None:
                 return {"error": f"data is not valid JSON: {exc}"}
         if data is not None and not isinstance(data, dict):
             return {"error": "data must be a JSON object"}
+        stage_cp = None
         try:
             if event == "stage_enter":
                 journal.enter_stage(stage)
+                # Altium Agent: a checkpoint per stage, so undo can go back to it.
+                from ..design.stage_checkpoints import session_project, take
+                proj = session_project(journal)
+                if proj is not None and proj.is_file():
+                    try:
+                        stage_cp = take(journal, stage, proj)
+                    except Exception as exc:  # noqa: BLE001 - the stage still starts
+                        stage_cp = {"error": f"stage checkpoint failed: {exc}"}
             elif event == "stage_result":
                 journal.stage_result(stage, status, verdict=text, data=data)
             elif event == "plan_revision":
@@ -305,6 +324,8 @@ def register_design_tools(mcp) -> None:
                              revision, topic)
         out: dict[str, Any] = {"session_id": journal.session_id,
                                "state": asdict(journal.state())}
+        if event == "stage_enter" and stage_cp is not None:
+            out["stage_checkpoint"] = stage_cp
         if event == "stage_result" and data:
             from ..design.autonomy import MEASURED_GATES, evaluate_gate
             if stage in MEASURED_GATES:

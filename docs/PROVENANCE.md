@@ -56,6 +56,9 @@ Changed:
 `diag/self_heal.py`, `diag/verify.py`, `analysis/drc_report.py`,
 `core/units_policy.py`, `core/cli_args.py`, `tools/agent.py`,
 `scripts/altium/lint_hardening.py`, `core/LEGACY_UNIT_TOOLS.json`,
+`routing/broker.py`, `routing/converge.py`, `routing/via_style.py`,
+`routing/service.py`, `tools/routing_broker.py`, `PCB_SetViaTenting` in
+`scripts/altium/PCB.pas`, the via tent flags in `offline/files/pcbdoc.py`,
 `tools/live_verified.json`, and their tests. They carry the Apache-2.0 SPDX
 line and no third-party copyright.
 
@@ -87,9 +90,18 @@ THIRD_PARTY_NOTICES.md; the package licence is declared `Apache-2.0 AND MIT`.
 | `tools/` analysis, inspection, quality, engineering, manufacturing, common, project, schematic, pcb, library, registry | `tools/offline/` | renamed into the Altium Agent groups by `publish.py` (Altium Agent's); offline gates carry a scope note that PASS is not manufacturing-ready; `validate_design` lost its live branch; OutJob runs and release packaging are not published |
 | `tests/` formats, analysis, netlist, examples, parity (read-only cases) | `tests/offline_files/` | imports; example paths from `ALTIUM_AGENT_EXAMPLES` / `ALTIUM_AGENT_KAME` |
 
+Copied in phase (d), from the altium-mcp-pro copy dated 2026-10-14 (the same
+licence and headers):
+
+| altium-mcp-pro | Altium Agent | Changes |
+|---|---|---|
+| `formats/specctra.py` | `routing/specctra.py` | imports; the fixed net class is `AGENT_FIXED`; the DSN names Altium Agent as host |
+| `tools/routing.py` (`find_freerouting`, `_run_freerouting`) | `routing/freerouting.py` | environment variables renamed; also looks in `%USERPROFILE%\Altium Agent\freerouting`; the jar is preferred to the native build (which crashes on keep-outs); the Java a jar needs is read from its main class and checked; analytics off; the log goes to a file |
+| `tools/routing.py` (`_apply_ses`) | `routing/ses_import.py` | a pure function making eda-agent bridge rows (`pcb.place_tracks`, `pcb.place_vias`) in absolute mils with canonical layer tokens; no bridge calls |
+
 Not copied (later phases or not wanted): `analysis/` astar, hop, negotiate,
-whatif, render, circuit, variant (placement and routing, phases c and d);
-`formats/specctra.py` (routing broker, phase d); `engines/` placement,
+whatif, render, circuit, variant (placement and routing research code; the
+broker uses the inherited in-house engine instead); `engines/` placement,
 component_search, release_evidence, svc_test_plan; `tools/` workflow,
 project_ops, autolayout, routing, incremental*, live*, exports; the
 DelphiScript bridge (Altium Agent keeps one transport).
@@ -117,7 +129,10 @@ Written for Altium Agent, not from Brass: `placement/check.py`,
 
 ## Freerouting (GPL-3.0)
 
-Never copied, bundled, imported or linked. A jar the user installed is run as
-a separate process with a DSN file in and an SES file out
-(`ALTIUM_AGENT_FREEROUTING_JAR`, `ALTIUM_AGENT_JAVA`), which keeps the GPL out
-of this code base.
+Never copied, bundled, imported or linked. A Freerouting the user installed
+(a jar, or a native build) is run as a separate process with a DSN file in and
+an SES file out (`ALTIUM_AGENT_FREEROUTING` or `ALTIUM_AGENT_FREEROUTING_JAR`,
+`ALTIUM_AGENT_JAVA`, or an installation under `%USERPROFILE%\Altium Agent\freerouting`
+or `%USERPROFILE%\.altium-mcp\freerouting`), which keeps the GPL out of this
+code base. The test suite runs it only when `ALTIUM_AGENT_FREEROUTING` points at
+one.

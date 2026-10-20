@@ -12,10 +12,11 @@ reference mode and checks of Brass and BoardKit, a routing broker, house-style
 profiles, verified writes and a self-healing bridge. Everything borrowed is
 listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-> **Status: phases (a) to (c).** The bridge, dispatcher, simulator,
+> **Status: phases (a) to (d).** The bridge, dispatcher, simulator,
 > DelphiScript linter (with the Altium Agent hardening rules), doctor, tool
 > catalog and generated reference (a); the offline readers, analysis and DFM
-> (b); and the Brass placer with house-style profiles (c) are in place, and
+> (b); the Brass placer with house-style profiles (c); and the routing broker
+> with external Freerouting, clash convergence and via tenting (d) are in place, and
 > the offline test suite passes. **Nothing has been verified against a live Altium by Altium Agent
 > yet**: every bridge tool is badged `simulator` or `live_unverified`, never
 > `live_verified`, until the release run in
@@ -132,15 +133,17 @@ on `design_next_action`, builds a DesignPlan (circuit blocks, datasheet-cited
 parts), lays out and executes the schematic (`design_execute_plan`), checks it
 (`proj_run_erc`, `design_audit_schematic`), checkpoints before each risky stage
 (`app_checkpoint`), and resumes from the journal after a lost context
-(`design_session_resume`). Placement to house style *(phase c)* and the routing
-broker *(phase d)* replace the inherited placer and router.
+(`design_session_resume`). Placement to house style (`place_plan`) and the
+routing broker (`route_broker_plan`) take over from the inherited placer and
+router.
 
 **A re-layout from a reference design.** Profile the reference
 (`ref_profile`), copy the project to a folder of your own and open the copy,
 plan a placement to the profile (`place_plan profile=...`; an RF module's
 antenna keep-out is asked for, never guessed), check it (`place_check`),
 apply it to the focused copy (`place_apply confirm=true`), then route with the
-broker *(phase d)* and compare the result with the reference (`ref_compare`).
+broker (`route_broker_plan`, then its steps) and compare the result with the
+reference (`ref_compare`).
 Samples and installed designs are never edited.
 
 **A review of an existing board.** `analyze_board_review` from the design
@@ -249,9 +252,10 @@ That clicks the menu and answers the dialogs in one call, which matters because 
   samples.
 - Nothing is called manufacturing-ready; fabrication outputs only after your
   explicit approval.
-- Freerouting (GPL) is never bundled: when a project's routing policy allows
-  third-party engines, a Freerouting jar you installed runs as a separate
-  process (`ALTIUM_AGENT_FREEROUTING_JAR`, `ALTIUM_AGENT_JAVA`).
+- Freerouting (GPL) is never bundled: a Freerouting you installed runs as a
+  separate process, with no window and analytics off, when the broker's
+  `engines` include it (`ALTIUM_AGENT_FREEROUTING` for its jar or native build,
+  `ALTIUM_AGENT_JAVA`; or an installation under `%USERPROFILE%\.altium-mcp\freerouting`).
 
 ## Tests
 

@@ -105,7 +105,9 @@ def test_tool_invoke_bad_args_returns_error(mcp):
 
 def test_tool_invoke_catalog_through_invoke(mcp):
     res = _invoke(mcp, "tool_catalog", {"category": "routing"})
-    assert res["result"]["count"] == 2
+    routing = [t.name for t in asyncio.run(mcp.list_tools()) if t.name.startswith("route_")]
+    assert len(routing) >= 2
+    assert res["result"]["count"] == len(routing)
 
 
 def test_tool_invoke_unknown_tool(mcp):

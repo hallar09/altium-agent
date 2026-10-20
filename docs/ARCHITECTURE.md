@@ -31,7 +31,7 @@ and is badged `modal` or `partial`.
 | `schemas/` | request and response models |
 | `tools/` | MCP tool registration by group; `metadata.py` assigns the badges; `agent.py` holds the Altium Agent additions; `offline/` the ported file tools, published under Altium Agent names by `publish.py` |
 | `design/` | the design harness: sessions and journal, DesignPlan, circuit blocks, schematic placer, discipline, guidance |
-| `routing/` | route planning and repair today; the routing broker (phase d) |
+| `routing/` | the inherited grid router and DRC repair planner; the broker (`broker.py`), clash convergence (`converge.py`), via styles and tenting (`via_style.py`), Specctra DSN/SES (`specctra.py`, `ses_import.py`), the external Freerouting runner (`freerouting.py`) and `service.py` for the `route_` tools |
 | `placement/` | the inherited force-directed solver (`autoplace.py`); the Brass placer port (`footprints`, `shape`, `antenna`, `placer`), plan checks (`check.py`) and the tool-facing `service.py` |
 | `reference/` | house style: `profile.py` measures a board and derives placer levers, `compare.py` flags departures |
 | `analysis/` | read-only analysis: DRC report summary, the design model, ERC, schematic/PCB sync, DFM, SI, copper and ratsnest, review (from altium-mcp-pro) |
@@ -66,6 +66,6 @@ then bundle into `AltiumAgent.pas`), `lint.py` and `lint_hardening.py`.
 | (a) Foundation | fork and cut-down of eda-agent, groups and badges, mm policy, hardening lint and Pascal fixes, verified rule enable, self-heal, DRC report, doctor, generated reference, docs | done, offline only |
 | (b) Analysis and offline | altium-mcp-pro's offline readers, SI/PI/EMC/thermal/DFM engines, gates and fab profiles as ~95 `read`/`analyze_` tools; DRC checker and polygon prompt answered by the dialog driver | done, offline; DRC dialogs await live verification |
 | (c) Placement and reference | Brass placer ported to Python (numpy), house-style `ref_profile` / `ref_compare`, `place_plan` / `place_check` offline, `place_apply` live | done; `place_apply` awaits live verification (A13) |
-| (d) Routing broker (next) | `route_` broker over Altium's interactive router, Situs and external Freerouting; pairs first; via styles with tenting read-back; converge clashes | |
-| (e) Render-and-review, checkpoints | board renders for review, design_status, journal-driven resume | |
+| (d) Routing broker | `route_broker_plan` (pairs first, critical nets, bulk by Freerouting or in-house, pours left to pours, hand routing locked), external Freerouting jobs with DSN/SES import, `route_converge`, via styles with tenting read-back from the file | done; `route_freerouting`, `route_import_ses`, `route_set_via_tenting` await live verification (A14, A15) |
+| (e) Render-and-review, checkpoints (next) | board renders for review, design_status, journal-driven resume | |
 | (f) Acceptance | live verification run; Kame_FMU_v2 re-layout, WiFi_Card new layout, USB HID macro stick from scratch; skills `autodesign`, `relayout`, `review` | |

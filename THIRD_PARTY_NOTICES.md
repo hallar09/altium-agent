@@ -12,8 +12,9 @@ header. docs/PROVENANCE.md says what was taken and what changed.
 `model.py`, `bom.py`, `consistency.py`, `copper.py`, `dfm.py`, `erc.py`,
 `overlap.py`, `review.py`, `si.py`, `board.py`, the tool modules in
 `src/altium_agent/tools/offline/` (except `publish.py` and `__init__.py`),
-and `tests/offline_files/` (except `conftest.py` and
-`test_altium_agent_offline.py`).
+`tests/offline_files/` (except `conftest.py` and
+`test_altium_agent_offline.py`), and `src/altium_agent/routing/`
+`specctra.py`, `freerouting.py` and `ses_import.py`.
 
 ```
 MIT License

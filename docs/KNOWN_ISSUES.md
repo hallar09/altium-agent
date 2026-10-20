@@ -61,14 +61,28 @@ board. Items marked **open** are not handled yet.
 
 ## Routing (from BoardKit; phase (d))
 
-These shape the routing broker and are **open** until it exists:
-Freerouting ignores intent (crystals, antenna keep-outs) and must be checked;
-autoroute before pouring (pours become obstacles); altium-mcp's Freerouting
-tool times out on big boards, so the broker will run Freerouting as a background
-process and import the SES; Freerouting's `java` is not on PATH; fan-out vias
-ignore parts on the other side and planned pair corridors; Situs gives up after
-its first pass has boxed pins in; diff pairs must be routed as pairs before
-autorouting; and a re-layout must not silently remove hand routing.
+| Issue | Handled by |
+|---|---|
+| Freerouting ignores intent: crystals, clocks, pairs. | The broker routes pairs, clock and crystal nets and short local nets with the in-house engine before Freerouting sees the bulk, as fixed copper. |
+| Antenna keep-outs. | DSN export carries the board's keep-out regions and Keep-Out layer. **Open**: a `place_plan` antenna keep-out is honoured only once drawn on the board as a keep-out region. |
+| Autoroute before pouring (pours become obstacles). | Pours are exported as planes of their net, poured nets are left to the pours, and every route step is followed by `pcb_repour_polygons`. |
+| Freerouting times out on big boards. | `route_freerouting` runs it as a job (`route_freerouting_status`), with its own timeout, and `route_import_ses` applies the result. |
+| Freerouting's `java` is not on PATH; 2.x needs Java 25. | `routing/freerouting.py` uses `ALTIUM_AGENT_JAVA`, a `jre` beside the jar, then PATH, and reads the Java a jar needs from its main class; `route_engines` reports a mismatch instead of a class-version crash. |
+| Freerouting 2.5's native CLI crashes (`UnsupportedFeatureError` for `ObstacleArea`) on boards with keep-outs. | The jar is preferred when both are installed. |
+| Freerouting sends usage analytics by default. | Every run passes `--usage_and_diagnostic_data.disable_analytics=true`. |
+| Fan-out vias ignore parts on the other side and pair corridors. | Batches run with Freerouting's fan-out off and pairs already routed. **Open** for a whole-board run. |
+| Situs gives up after its first pass has boxed pins in. | The broker does not drive Situs (its dialog stops a script); it is offered for the last few connections, by hand. |
+| Diff pairs must be routed as pairs first. | First step of every plan (in-house engine, `diff_pairs`). |
+| A re-layout must not silently remove hand routing. | Routed nets are locked first (`pcb_lock_net_routing`), exported as fixed wiring, never ripped by `route_converge` (only `include_locked=false` unroutes of the plan's own nets), and SES copper that matches existing copper is not written twice. |
+| Via tenting. | `pcb.set_via_tenting` sets manual mask mode, then tenting, and reads it back; `route_set_via_tenting` also confirms it from the saved file (tent flags 0x20/0x40 of the via record). **Live-unverified** (A15): the mask-mode write is the kind of via write that once crashed AD26's scripting engine. |
+
+Measured on Kame_FMU (offline, Freerouting 2.5.0 jar on Java 25): with three
+nets' copper taken up and everything else fixed, Freerouting put back 10 of
+11 connections in 106 s (one FMU_VBAT connection left). With all of Kame's
+routing taken up (pours kept as planes), one Freerouting run on two cores left
+16 of 424 items unconnected after 18 passes and 13 minutes: the bulk tier
+works, and a dense six-layer board still needs the in-house tiers,
+`route_converge` and a person for the last connections.
 
 ## Debt carried from eda-agent
 

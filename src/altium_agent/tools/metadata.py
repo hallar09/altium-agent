@@ -160,6 +160,11 @@ _OFFLINE_SUBSTRINGS = ("_calc_", "calc_", "_compute_", "compute_")
 _OFFLINE_BY_NAME = frozenset({
     # Altium Agent phase (c): files in, JSON out (place_apply is live).
     "ref_profile", "ref_compare", "place_plan", "place_check",
+    # Altium Agent phase (d): the broker's file side (the live ones are
+    # route_freerouting, route_import_ses and
+    # route_set_via_tenting).
+    "route_engines", "route_broker_plan", "route_export_dsn", "route_converge", "route_via_style",
+    "route_freerouting_status",
     "lib_check_package", "lib_render_package",
     # Part sourcing queries part providers (registries, local libraries)
     # and datasheet fetch downloads a PDF; neither reaches the bridge.
@@ -206,6 +211,8 @@ _DESIGN_BRIDGE = frozenset(
 # --- explicit interaction overrides (from the DelphiScript bridge audit) ----
 # Only tools that are NOT plain readonly/silent under the default rules.
 INTERACTION_OVERRIDES = {
+    # Altium Agent: writes the DSN file it exports (into the outputs folder).
+    "route_export_dsn": SILENT,
     # Non-suppressible modal dialogs that block the single-threaded loop.
     "proj_sync_pcb": MODAL,          # ECO / Update-PCB dialog
     "proj_sync_schematic": MODAL,    # Update-Schematic dialog

@@ -28,7 +28,7 @@ listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
   auto-shutdown, crash and fault detection). Nothing launches
   `X2.EXE -RScriptingSystem:RunScript` per call, and nothing starts a second
   Altium.
-- **Around 490 tools, grouped by the document they act on**: `app_`, `proj_`,
+- **Around 580 tools, grouped by the document they act on**: `app_`, `proj_`,
   `sch_`, `pcb_`, `lib_`, `obj_`, `route_`, `place_`, `ref_`, `analyze_`,
   `design_`, `audit_`, plus the meta-tools `tool_catalog`, `tool_invoke` and
   `tool_guide`. See [docs/TOOL_NAMING.md](docs/TOOL_NAMING.md) and the
@@ -47,6 +47,14 @@ listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
   only after manual mask mode, rule enable/disable read back (it does not stick
   in AD26), net names starting with `-`, DRC reports cut off at 500, and never
   a second X2.EXE. See [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
+- **Design files without Altium**: PrjPcb, PcbDoc, SchDoc, SchLib/PcbLib and
+  OutJob readers (from altium-mcp-pro) behind about 95 offline tools:
+  `pcb_read_*`, `sch_read_*`, `proj_read_*` for what is in the files, and
+  `analyze_*` for ERC, schematic/PCB sync, DFM against fab profiles, SI
+  calculators and board-aware impedance, PDN, thermal, EMC heuristics and
+  gates. On Altium's Kame_FMU sample the schematic and board agree net for
+  net (158 of 158). Gates are pre-checks: a PASS is never a statement that a
+  board is ready to manufacture.
 - **Self-healing bridge**: `app_diagnose` names what is holding Altium (no
   Altium, two Altiums, bridge not started or halted, a modal dialog, "a command
   is currently active", a dialog off-screen or on another monitor, the
@@ -107,7 +115,7 @@ or the equivalent entry under `mcpServers` in Claude's configuration:
 }
 ```
 
-Clients that cannot load ~490 tool schemas can set `ALTIUM_AGENT_TOOLSET=minimal`
+Clients that cannot load ~580 tool schemas can set `ALTIUM_AGENT_TOOLSET=minimal`
 in `env`; only `tool_catalog` and `tool_invoke` are advertised and every other
 tool stays reachable through them. `ALTIUM_AGENT_DISABLE_DASHBOARD=1` skips the
 local web dashboard for strict stdio clients.
@@ -131,7 +139,9 @@ broker *(phase d)* replace the inherited placer and router.
 converge clashes, tent and size vias to the profile, and check with
 `ref_compare`.
 
-**A review of an existing board.** `analyze_review_design` for netlist hygiene,
+**A review of an existing board.** `analyze_board_review` from the design
+files alone (ERC, schematic/PCB sync, DFM against a fab profile, decoupling,
+placement), then `analyze_review_design` for netlist hygiene,
 the `audit_` tools for pins, decoupling and nets, `pcb_layout_audit` for
 geometry, and `analyze_drc_report` on Altium's DRC report, which separates
 copper problems from silk/mask noise and flags a report cut off at 500.

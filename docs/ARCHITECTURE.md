@@ -29,13 +29,14 @@ and is badged `modal` or `partial`.
 |---|---|
 | `bridge/` | the polling-bridge client, protocol, session slots, process manager |
 | `schemas/` | request and response models |
-| `tools/` | MCP tool registration by group; `metadata.py` assigns the badges; `agent.py` holds the Altium Agent additions |
+| `tools/` | MCP tool registration by group; `metadata.py` assigns the badges; `agent.py` holds the Altium Agent additions; `offline/` the ported file tools, published under Altium Agent names by `publish.py` |
 | `design/` | the design harness: sessions and journal, DesignPlan, circuit blocks, schematic placer, discipline, guidance |
 | `routing/` | route planning and repair today; the routing broker (phase d) |
 | `placement/` | placement engines; placement to a profile (phase c) |
 | `reference/` | reference designs and house style: `ref_profile`, `ref_compare` (phase c) |
-| `analysis/` | read-only analysis: DRC report summary; altium-mcp-pro's SI/PI/EMC/DFM suites (phase b) |
-| `offline/` | headless readers for .SchDoc / .PcbDoc / libraries (olefile) |
+| `analysis/` | read-only analysis: DRC report summary, the design model, ERC, schematic/PCB sync, DFM, SI, copper and ratsnest, review (from altium-mcp-pro) |
+| `analysis/engines/` | SI/PI/EMC/thermal engines and fab profiles (kicad-mcp-pro via altium-mcp-pro) |
+| `offline/` | headless readers: eda-agent's schematic readers, and `offline/files/` for PrjPcb, PcbDoc, SchDoc, SchLib/PcbLib and OutJob (altium-mcp-pro); `context.py` holds the read-anywhere, write-only-to-outputs rule |
 | `layout/` | the inherited board layout engine |
 | `diag/` | `doctor`, self-heal diagnosis and recovery, live-verification records |
 | `core/` | shared policy: backend, units policy, CLI argument handling |
@@ -63,8 +64,8 @@ then bundle into `AltiumAgent.pas`), `lint.py` and `lint_hardening.py`.
 | Phase | Content | State |
 |---|---|---|
 | (a) Foundation | fork and cut-down of eda-agent, groups and badges, mm policy, hardening lint and Pascal fixes, verified rule enable, self-heal, DRC report, doctor, generated reference, docs | done, offline only |
-| (b) Analysis and offline | altium-mcp-pro's offline readers, SI/PI/EMC/thermal/DFM engines and fab profiles; DRC-with-pours prompt in the dialog driver | next |
-| (c) Placement and reference | Brass placement and checks, `ref_profile` / `ref_compare`, `place_` tools to a house style | |
+| (b) Analysis and offline | altium-mcp-pro's offline readers, SI/PI/EMC/thermal/DFM engines, gates and fab profiles as ~95 `read`/`analyze_` tools; DRC checker and polygon prompt answered by the dialog driver | done, offline; DRC dialogs await live verification |
+| (c) Placement and reference | Brass placement and checks, `ref_profile` / `ref_compare`, `place_` tools to a house style | next |
 | (d) Routing broker | `route_` broker over Altium's interactive router, Situs and external Freerouting; pairs first; via styles with tenting read-back; converge clashes | |
 | (e) Render-and-review, checkpoints | board renders for review, design_status, journal-driven resume | |
 | (f) Acceptance | live verification run; Kame_FMU_v2 re-layout, WiFi_Card new layout, USB HID macro stick from scratch; skills `autodesign`, `relayout`, `review` | |

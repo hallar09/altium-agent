@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "altium-agent"
 version = "0.1.0"
-description = "Altium Agent: MCP server, CLI and Claude skills for Altium Designer: around 490 tools over one persistent DelphiScript bridge."
+description = "Altium Agent: MCP server, CLI and Claude skills for Altium Designer: around 580 tools over one persistent DelphiScript bridge."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "Apache-2.0"
+license = "Apache-2.0 AND MIT"
 authors = [
     { name = "Altium Agent contributors" },
 ]
@@ -123,6 +123,7 @@ include = [
     "README.md",
     "LICENSE",
     "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
     "docs",
     "pyproject.toml",
 ]

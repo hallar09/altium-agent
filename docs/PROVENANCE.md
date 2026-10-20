@@ -8,7 +8,7 @@ what was changed. The sources were read, never edited.
 | Source | Where it was read | Version | Licence | Used as |
 |---|---|---|---|---|
 | eda-agent (George Saliba) | `%USERPROFILE%\OneDrive\Documents\eda-agent-main` | 0.7.1 | Apache-2.0, with NOTICE | the foundation: forked whole, then cut down |
-| altium-mcp-pro (altium-mcp-pro contributors) | `%USERPROFILE%\Downloads\kicad-mcp-pro-main\altium-mcp-pro` | 0.2.0 | MIT; its `engines/` adapted from kicad-mcp-pro (Osman Aslan, MIT) | phase (b): offline readers, analysis, DFM. Nothing copied yet |
+| altium-mcp-pro (altium-mcp-pro contributors) | `%USERPROFILE%\Downloads\kicad-mcp-pro-main\altium-mcp-pro` | 0.2.0 | MIT; its `engines/` adapted from kicad-mcp-pro (Osman Aslan, MIT) | phase (b): offline file readers, analysis engines, DFM and their offline tools |
 | Brass | `%USERPROFILE%\Downloads\brass` | (unversioned) | Apache-2.0, with NOTICE; parts derived from copperhead (Chouhan Industries, Apache-2.0) | phase (c): placement, reference checks. Nothing copied yet |
 | BoardKit | `%USERPROFILE%\Documents\BoardKit` | (unversioned) | **no licence file** | lessons only (see below) |
 | Freerouting | installed by the user | any | GPL-3.0 | an external process only, never vendored or linked |
@@ -71,9 +71,28 @@ licence it may be.
 
 ## altium-mcp-pro and kicad-mcp-pro (MIT)
 
-When phase (b) copies code, each file keeps its MIT copyright line, the MIT
-text goes to `THIRD_PARTY_NOTICES.md`, and kicad-mcp-pro's notice travels with
-the `engines/` code derived from it.
+Copied in phase (b), from altium-mcp-pro 0.2.0. Every file keeps an
+`SPDX-License-Identifier: MIT` line with its copyright, names the file it came
+from, and says it was modified for Altium Agent. The licence texts are in
+THIRD_PARTY_NOTICES.md; the package licence is declared `Apache-2.0 AND MIT`.
+
+| altium-mcp-pro | Altium Agent | Changes |
+|---|---|---|
+| `formats/` (records, ini, prjpcb, pcbdoc, schdoc, sch_netlist, libraries, outjob) | `offline/files/` | imports; the mm-per-mil factor now comes from `altium_agent.units` |
+| `errors.py` | `offline/errors.py` | base class renamed `OfflineError` |
+| `discovery.py` | `find_projects` in `offline/context.py` | only the folder walk kept; process and install lookups dropped (Altium Agent has its own) |
+| `config.py`, `paths.py`, `session.py`, `modes.py` | replaced by `offline/context.py` (Altium Agent's) | reading allowed anywhere; writing only under the Altium Agent output folder, never beside a design or into Altium's folders; no operating modes |
+| `analysis/` model, bom, consistency, copper, dfm, erc, overlap, review, si, board | `analysis/` | imports; the fab-profile data path; stack-up layer names matched without spaces or case; a footprint that is one of the part's alternate models is flagged `pcb_is_an_alternate_model` |
+| `engines/` and `engines/data/*.json` (from kicad-mcp-pro) | `analysis/engines/` | imports, environment variable names, unit factor |
+| `tools/` analysis, inspection, quality, engineering, manufacturing, common, project, schematic, pcb, library, registry | `tools/offline/` | renamed into the Altium Agent groups by `publish.py` (Altium Agent's); offline gates carry a scope note that PASS is not manufacturing-ready; `validate_design` lost its live branch; OutJob runs and release packaging are not published |
+| `tests/` formats, analysis, netlist, examples, parity (read-only cases) | `tests/offline_files/` | imports; example paths from `ALTIUM_AGENT_EXAMPLES` / `ALTIUM_AGENT_KAME` |
+
+Not copied (later phases or not wanted): `analysis/` astar, hop, negotiate,
+whatif, render, circuit, variant (placement and routing, phases c and d);
+`formats/specctra.py` (routing broker, phase d); `engines/` placement,
+component_search, release_evidence, svc_test_plan; `tools/` workflow,
+project_ops, autolayout, routing, incremental*, live*, exports; the
+DelphiScript bridge (Altium Agent keeps one transport).
 
 ## Brass and copperhead (Apache-2.0)
 

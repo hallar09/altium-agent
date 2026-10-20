@@ -54,6 +54,7 @@ _FAMILIES = ("easyeda_", "lib_", "pcb_", "sch_", "proj_", "obj_", "app_",
 NOT_TOOLS: dict[str, str] = {
     "kicad_local": "a part provider id, listed in the provider table",
     "part_count": "a parameter of lib_create_symbol",
+    "pcb_is_an_alternate_model": "a reply field of analyze_sch_pcb_sync",
     "part_id": "a parameter of sch_place_dblib_component",
     "part_id_applied": "a reply field of sch_place_dblib_component",
     # The namespace PREFIXES, which the readme names when explaining

@@ -40,7 +40,6 @@
   "pcb_cleanup_tracks",
   "pcb_create_room",
   "pcb_delete_object",
-  "pcb_get_clearance_violations",
   "pcb_layout_audit",
   "pcb_make_paste_grid",
   "pcb_modify_layer",

@@ -325,7 +325,18 @@ def category_of(name: str) -> str:
     return "other"
 
 
+def _ported_offline_names() -> frozenset[str]:
+    """The altium-mcp-pro file tools (tools/offline): files in, report out."""
+    try:
+        from .offline import offline_tool_names
+    except Exception:  # noqa: BLE001 - metadata must never fail to import
+        return frozenset()
+    return offline_tool_names()
+
+
 def _is_offline(name: str, category: str) -> bool:
+    if name in _ported_offline_names():
+        return True
     if category in _OFFLINE_CATEGORIES:
         return True
     if name in _OFFLINE_BY_NAME:
@@ -380,6 +391,8 @@ def maturity_of(name: str, category: str | None = None) -> str:
 def interaction_of(name: str, category: str | None = None) -> str:
     if name in INTERACTION_OVERRIDES:
         return INTERACTION_OVERRIDES[name]
+    if name in _ported_offline_names():
+        return READONLY
     category = category or category_of(name)
     if category == "audit":
         return READONLY

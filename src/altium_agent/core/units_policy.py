@@ -91,6 +91,8 @@ def classify(name: str, fn: Callable) -> ToolUnits:
         return out
     for pname in params:
         kind = unit_of(pname)
+        if pname == "offset" and "limit" in params:
+            kind = "none"  # pagination: an item offset beside a limit, not a length
         if kind == "mm":
             out.mm.append(pname)
         elif kind == "mil":

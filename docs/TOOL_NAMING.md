@@ -25,13 +25,19 @@ The group is the first token and says what the tool acts on. A test
 
 ## Verbs
 
-Prefer the shared set `get` (one, known) · `list` (enumerate) · `create` ·
+Prefer the shared set `get` (one, known, from the live Altium) · `read`
+(from a design FILE, no Altium needed) · `list` (enumerate) · `create` ·
 `add` · `set` · `update` · `delete` · `remove` · `place` · `move` · `copy` ·
 `run` · `export` · `import` · `open` · `close` · `save` · `attach` · `find` ·
 `check` · `calc` · `plan` · `sync` · `render`. Domain verbs that are already
 clear (`flip`, `align`, `repour`, `tune`, `panelize`) are kept. The group
 carries the subsystem, so the object drops redundant words
 (`app_get_status`, not `get_altium_status`).
+
+`get` and `read` are kept apart on purpose: `pcb_get_nets` asks the running
+Altium about the open board (what is in memory, unsaved edits included),
+`pcb_read_nets` parses the .PcbDoc on disk. The two can disagree, and the
+name says which one answered.
 
 ## Bulk variants
 

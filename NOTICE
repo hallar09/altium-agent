@@ -16,7 +16,10 @@ Every file taken from eda-agent keeps its copyright line and carries a
 and what changed.
 
 Code adapted from other sources is listed in docs/PROVENANCE.md with its
-licence. Freerouting (GPL-3.0) is never included: when a project's policy
+licence. MIT-licensed parts from altium-mcp-pro and kicad-mcp-pro keep their
+licence; their notices are in THIRD_PARTY_NOTICES.md.
+
+Freerouting (GPL-3.0) is never included: when a project's policy
 allows it, Altium Agent runs a separately installed Freerouting as an
 external process.
 

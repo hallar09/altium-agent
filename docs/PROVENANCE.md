@@ -96,8 +96,24 @@ DelphiScript bridge (Altium Agent keeps one transport).
 
 ## Brass and copperhead (Apache-2.0)
 
-When phase (c) copies code, each file keeps its header (including "adapted
-from copperhead"), and Brass's NOTICE text is added to ours.
+Brass is Apache-2.0 with no named copyright holder; its NOTICE credits
+copperhead (Copyright 2026 Chouhan Industries) for the agent loop and related
+parts. Altium Agent takes only Brass's board code, which Brass's NOTICE lists
+as new to Brass rather than adapted from copperhead, so nothing of copperhead
+is copied. Each ported file says "Copyright 2026 Brass contributors" and
+"Adapted from Brass ... for Altium Agent", and Brass's NOTICE text is in our
+NOTICE.
+
+| Altium Agent file | Brass source | What changed |
+|---|---|---|
+| `placement/footprints.py` | `src/board/footprints.ts` | TypeScript to Python; reads our offline PcbDoc reader instead of Brass's; adds `pad_box` (copper only) |
+| `placement/shape.py` | `src/board/shape.ts` | port; `outline_from_points` keeps an existing outline and its offset |
+| `placement/antenna.py` | `src/board/antenna.ts` | port |
+| `placement/placer.py` | `src/board/placer.ts` (with `src/geometry.ts`) | port with the same seeded PRNG (mulberry32), so a seed means the same thing; net length and the outline mask vectorised with numpy; levers take `_mm` names; new `body` lever (space by copper) and `decap_weight`; placements returned in the board's own frame |
+
+Written for Altium Agent, not from Brass: `placement/check.py`,
+`placement/service.py`, `reference/profile.py`, `reference/compare.py`,
+`tools/house_style.py` and `tests/test_placement_house_style.py`.
 
 ## Freerouting (GPL-3.0)
 

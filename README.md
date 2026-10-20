@@ -12,10 +12,11 @@ reference mode and checks of Brass and BoardKit, a routing broker, house-style
 profiles, verified writes and a self-healing bridge. Everything borrowed is
 listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-> **Status: phase (a), foundation.** The bridge, dispatcher, simulator,
+> **Status: phases (a) to (c).** The bridge, dispatcher, simulator,
 > DelphiScript linter (with the Altium Agent hardening rules), doctor, tool
-> catalog and generated reference are in place and the offline test suite
-> passes. **Nothing has been verified against a live Altium by Altium Agent
+> catalog and generated reference (a); the offline readers, analysis and DFM
+> (b); and the Brass placer with house-style profiles (c) are in place, and
+> the offline test suite passes. **Nothing has been verified against a live Altium by Altium Agent
 > yet**: every bridge tool is badged `simulator` or `live_unverified`, never
 > `live_verified`, until the release run in
 > [docs/RELEASE_VERIFICATION.md](docs/RELEASE_VERIFICATION.md) records it.
@@ -134,10 +135,13 @@ parts), lays out and executes the schematic (`design_execute_plan`), checks it
 (`design_session_resume`). Placement to house style *(phase c)* and the routing
 broker *(phase d)* replace the inherited placer and router.
 
-**A re-layout from a reference design** *(phase c)*. Profile the reference
-(`ref_profile`), prepare a copy, place to the profile, route with the broker,
-converge clashes, tent and size vias to the profile, and check with
-`ref_compare`.
+**A re-layout from a reference design.** Profile the reference
+(`ref_profile`), copy the project to a folder of your own and open the copy,
+plan a placement to the profile (`place_plan profile=...`; an RF module's
+antenna keep-out is asked for, never guessed), check it (`place_check`),
+apply it to the focused copy (`place_apply confirm=true`), then route with the
+broker *(phase d)* and compare the result with the reference (`ref_compare`).
+Samples and installed designs are never edited.
 
 **A review of an existing board.** `analyze_board_review` from the design
 files alone (ERC, schematic/PCB sync, DFM against a fab profile, decoupling,

@@ -32,8 +32,8 @@ and is badged `modal` or `partial`.
 | `tools/` | MCP tool registration by group; `metadata.py` assigns the badges; `agent.py` holds the Altium Agent additions; `offline/` the ported file tools, published under Altium Agent names by `publish.py` |
 | `design/` | the design harness: sessions and journal, DesignPlan, circuit blocks, schematic placer, discipline, guidance |
 | `routing/` | route planning and repair today; the routing broker (phase d) |
-| `placement/` | placement engines; placement to a profile (phase c) |
-| `reference/` | reference designs and house style: `ref_profile`, `ref_compare` (phase c) |
+| `placement/` | the inherited force-directed solver (`autoplace.py`); the Brass placer port (`footprints`, `shape`, `antenna`, `placer`), plan checks (`check.py`) and the tool-facing `service.py` |
+| `reference/` | house style: `profile.py` measures a board and derives placer levers, `compare.py` flags departures |
 | `analysis/` | read-only analysis: DRC report summary, the design model, ERC, schematic/PCB sync, DFM, SI, copper and ratsnest, review (from altium-mcp-pro) |
 | `analysis/engines/` | SI/PI/EMC/thermal engines and fab profiles (kicad-mcp-pro via altium-mcp-pro) |
 | `offline/` | headless readers: eda-agent's schematic readers, and `offline/files/` for PrjPcb, PcbDoc, SchDoc, SchLib/PcbLib and OutJob (altium-mcp-pro); `context.py` holds the read-anywhere, write-only-to-outputs rule |
@@ -65,7 +65,7 @@ then bundle into `AltiumAgent.pas`), `lint.py` and `lint_hardening.py`.
 |---|---|---|
 | (a) Foundation | fork and cut-down of eda-agent, groups and badges, mm policy, hardening lint and Pascal fixes, verified rule enable, self-heal, DRC report, doctor, generated reference, docs | done, offline only |
 | (b) Analysis and offline | altium-mcp-pro's offline readers, SI/PI/EMC/thermal/DFM engines, gates and fab profiles as ~95 `read`/`analyze_` tools; DRC checker and polygon prompt answered by the dialog driver | done, offline; DRC dialogs await live verification |
-| (c) Placement and reference | Brass placement and checks, `ref_profile` / `ref_compare`, `place_` tools to a house style | next |
-| (d) Routing broker | `route_` broker over Altium's interactive router, Situs and external Freerouting; pairs first; via styles with tenting read-back; converge clashes | |
+| (c) Placement and reference | Brass placer ported to Python (numpy), house-style `ref_profile` / `ref_compare`, `place_plan` / `place_check` offline, `place_apply` live | done; `place_apply` awaits live verification (A13) |
+| (d) Routing broker (next) | `route_` broker over Altium's interactive router, Situs and external Freerouting; pairs first; via styles with tenting read-back; converge clashes | |
 | (e) Render-and-review, checkpoints | board renders for review, design_status, journal-driven resume | |
 | (f) Acceptance | live verification run; Kame_FMU_v2 re-layout, WiFi_Card new layout, USB HID macro stick from scratch; skills `autodesign`, `relayout`, `review` | |

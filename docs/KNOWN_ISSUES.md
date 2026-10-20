@@ -43,6 +43,22 @@ board. Items marked **open** are not handled yet.
 |---|---|
 | A net named `-5V` or `-VBAT` given as `--nets -5V` is read as an option. | The CLI joins list options as `--nets=-5V` and splits names itself (`core/cli_args.py`, `tests/test_net_names_with_a_leading_dash.py`). |
 
+## Placement (phase c)
+
+- **Footprint boxes include silkscreen and courtyards.** On dense boards these
+  overlap by design (Kame_FMU's body gaps are negative at p25), so a profile
+  whose body gaps are habitually negative switches the placer to copper
+  spacing (`body: "copper"`). Silkscreen clashes are then left to DRC.
+- **The Python placer is slower than Brass's TypeScript.** Kame_FMU (102 parts)
+  takes about 7 s at `effort` 0.1 and 17 s at 0.5. **Open**: at those efforts
+  one or two of Kame's large ICs stay unplaced inside the original outline;
+  `place_check` reports them and `place_apply` refuses the plan.
+- **Decoupling distance is a pull, not a guarantee.** `place_check` flags caps
+  beyond the profile's p90 (or 3 mm); raise `decap_weight` and re-plan.
+- **`place_apply` is `live_unverified`** until step A13 records it.
+  `pcb.import_placement` sets absolute mils; the tool refuses a focused board
+  that is not the plan's, or whose origin moved since planning.
+
 ## Routing (from BoardKit; phase (d))
 
 These shape the routing broker and are **open** until it exists:

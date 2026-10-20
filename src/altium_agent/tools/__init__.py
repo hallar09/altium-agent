@@ -42,6 +42,7 @@ from .live import register_live_tools
 from .footprint import register_footprint_tools
 from .agent import register_agent_tools
 from .offline import register_offline_tools
+from .house_style import register_house_style_tools
 
 # Altium Agent drives Altium Designer only. The backend switch of
 # eda-agent (kicad / easyeda / both) was removed; the names stay so callers
@@ -198,6 +199,8 @@ def _register_full(mcp, backend: str = DEFAULT_BACKEND) -> str:
     # Altium Agent additions (tools/agent.py and what it imports).
     register_agent_tools(mcp)
     register_offline_tools(mcp)
+    # House style and placement (phase c).
+    register_house_style_tools(mcp)
     return backend
 
 
@@ -220,6 +223,7 @@ __all__ = [
     "register_footprint_tools",
     "register_agent_tools",
     "register_offline_tools",
+    "register_house_style_tools",
     "register_project_tools",
     "register_library_tools",
     "register_generic_tools",

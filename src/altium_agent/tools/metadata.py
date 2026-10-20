@@ -158,6 +158,8 @@ _OFFLINE_SUBSTRINGS = ("_calc_", "calc_", "_compute_", "compute_")
 # the package checks compute over a package description and never reach an
 # editor, so they work with nothing running.
 _OFFLINE_BY_NAME = frozenset({
+    # Altium Agent phase (c): files in, JSON out (place_apply is live).
+    "ref_profile", "ref_compare", "place_plan", "place_check",
     "lib_check_package", "lib_render_package",
     # Part sourcing queries part providers (registries, local libraries)
     # and datasheet fetch downloads a PDF; neither reaches the bridge.

@@ -33,6 +33,7 @@ afterwards (`python scripts/gen_tool_reference.py`).
 | A10 | `analyze_drc_report` | on the report Altium wrote for the copy, the counts per rule match the report's summary table |
 | A11 | `pcb_run_drc` with `answer_dialogs=True` | on a copy with one polygon shelved: `drc_pours="ask"` stops at the polygon prompt and reports it; `drc_pours="run_as_is"` presses Run DRC, then Run and Close on the checker, and `drc_confirmed` is true. Record the exact captions seen in `dialogs.steps` |
 | A12 | `analyze_sch_pcb_sync`, `pcb_read_summary`, `analyze_board_review` | on a copy of Kame_FMU: 158 nets match and the summary agrees with Altium's Board Information; these are `offline` and need no record, but say if they disagree with Altium |
+| A13 | `place_plan`, `place_check`, `place_apply` | on a copy of Kame_FMU in a folder of your own, opened and focused: `place_apply` without `confirm` returns a preview; on the sample under %PUBLIC% it refuses; with `confirm=true` (plus `accept_findings=true` if the plan's check reports errors) it moves every part to the plan's position (spot-check three parts' X/Y/rotation/layer against the plan JSON, origin-relative) and Undo restores them |
 
 Steps A6 to A9 exercise the handlers whose PreProcess/PostProcess pairs
 Altium Agent wrapped in Try/Finally.

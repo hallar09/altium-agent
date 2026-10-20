@@ -16,7 +16,7 @@ The group is the first token and says what the tool acts on. A test
 | `lib_` | libraries, footprints, symbols, parts, datasheets | library |
 | `obj_` | the generic object layer: query, modify, select, view, highlight | generic |
 | `route_` | routing: plans, the routing broker, repairs | routing |
-| `place_` | placement to a profile or house style | placement |
+| `place_` | placement to a profile or house style: `place_plan`, `place_check`, `place_apply` | placement |
 | `ref_` | reference designs and house style (`ref_profile`, `ref_compare`) | reference |
 | `analyze_` | read-only analysis: DRC report, SPICE, review | analysis |
 | `design_` | the design harness: sessions, DesignPlan, blocks, execution | design |

@@ -36,9 +36,16 @@ is placed and routed to it and checked against it.
    questions from the datasheet; `place_check` until it has no errors (inherited
    findings on locked parts are fine and are reported apart); `place_apply(confirm=true)`;
    save; `design_gate_review(gate="placement")` and answer its rubric.
-5. **Routing**: enter `routing`, then `route_broker_plan(project=<copy>, profile=<name>)`
-   and follow its steps: lock, pairs, critical nets, bulk, repour, DRC,
-   `route_converge` until done or escalated. Save; `design_gate_review(gate="routing")`.
+5. **Routing**: enter `routing`, then
+   `route_broker_plan(project=<copy>, profile=<name>, reference=<reference .PcbDoc>)`
+   and follow its steps: lock, the big part's escape copied from the reference
+   (`route_refcopy`, when the parts are where the reference has them), pairs,
+   critical nets, bulk, `route_situs` to finish, repour, DRC, `route_converge`
+   until done or escalated (with the reference placement it copies clashing
+   nets from the reference). Pours box autorouters in: there is no shelve tool
+   yet, so ask the user to shelve them for the routing pass (Tools > Polygon
+   Pours > Shelve) or rely on Freerouting, which takes them as planes. Save;
+   `design_gate_review(gate="routing")`.
 6. **Vias**: `route_via_style(profile=<name>)`; fix sizes, then
    `route_set_via_tenting` (dry run first) and confirm `verified` from the file.
 7. **Compare and report**: `ref_compare(profile)` (expect a match),

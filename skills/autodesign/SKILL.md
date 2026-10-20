@@ -57,7 +57,7 @@ read the saved files.
 | sch_to_pcb | `proj_sync_pcb` (its ECO dialog is answered by the dialog driver); `analyze_sch_pcb_sync` | every net and part on the board |
 | rules_stackup | `pcb_set_board_shape`; layers (`pcb_add_layer`, `pcb_modify_layer`, `analyze_si_generate_stackup` for impedance); rules (`pcb_create_design_rule`), diff pairs (`pcb_create_diff_pair`, `pcb_get_diff_pair_rules`) | rules match the fab profile (`analyze_dfm_use_profile`) |
 | placement | `place_plan` (answer its antenna questions; `profile=` for a house style), `place_check` until clean, `place_apply(confirm=true)` | `design_gate_review(gate="placement")` answered, no error marker |
-| routing | `route_broker_plan` and its steps in order (pairs, critical nets, bulk by Freerouting or in-house), `pcb_repour_polygons`, `pcb_run_drc`, `route_converge` until done | 0 unrouted, 0 copper DRC; pairs within the skew asked for; `design_gate_review(gate="routing")` answered |
+| routing | `route_broker_plan` and its steps in order (pairs, critical nets, bulk by Freerouting or in-house, `route_situs` to finish), `pcb_repour_polygons`, `pcb_run_drc`, `route_converge` until done | 0 unrouted, 0 copper DRC; pairs within the skew asked for; `design_gate_review(gate="routing")` answered |
 | pours_tuning | ground pours, stitching (`pcb_place_stitching_vias`), `route_via_style` and `route_set_via_tenting` to the style | via style matches, tenting verified from the file |
 | verification | `pcb_run_drc`, `analyze_drc_report`, `analyze_board_review`, `analyze_dfm`, `design_status` | `design_gate_review(gate="verification")` answered; open issues listed, none hidden |
 | outputs | only with the user's explicit approval | `design_session_report` written |

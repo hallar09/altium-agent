@@ -46,7 +46,7 @@ Begin
             Begin
                 Proj := Workspace.DM_Projects(I);
                 If Proj = Nil Then Continue;
-                If Pos('ALTIUM_API.PRJSCR', UpperCase(Proj.DM_ProjectFullPath)) > 0 Then
+                If Pos('ALTIUMAGENT.PRJSCR', UpperCase(Proj.DM_ProjectFullPath)) > 0 Then
                 Begin
                     If ScriptProjects <> '' Then ScriptProjects := ScriptProjects + ',';
                     ScriptProjects := ScriptProjects + '"'

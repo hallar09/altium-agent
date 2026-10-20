@@ -38,20 +38,26 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed; see the messages above." }
 $Exe = "$Root\.venv\Scripts\altium-agent.exe"
 if (-not (Test-Path $Exe)) { throw "Install finished but $Exe is missing." }
 
-# 3. Register the MCP server (user scope), with a backup of .claude.json
+# Native commands below may print to stderr; that must not abort the script.
+$ErrorActionPreference = "Continue"
+
+# 3. The Altium side first: copy and stamp the script project to %USERPROFILE%\Altium Agent\scripts
+& $Exe install-scripts --force
+if ($LASTEXITCODE -ne 0) { throw "install-scripts failed; see the messages above." }
+$Scripts = Join-Path $env:USERPROFILE "Altium Agent\scripts"
+if (-not (Test-Path "$Scripts\AltiumAgent.PrjScr")) { throw "install-scripts ran but $Scripts\AltiumAgent.PrjScr is missing." }
+Write-Host "Altium scripts installed in $Scripts"
+
+# 4. Register the MCP server (user scope), with a backup of .claude.json.
+# Done by editing the JSON directly (only the AltiumAgent entry), which works
+# whether or not the claude command is on PATH.
 $Cfg = Join-Path $env:USERPROFILE ".claude.json"
 if (Test-Path $Cfg) {
     $Bak = "$Cfg.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
     Copy-Item $Cfg $Bak
     Write-Host "Backed up $Cfg to $Bak"
 }
-$claude = Get-Command claude -ErrorAction SilentlyContinue
-if ($claude) {
-    try { & claude mcp remove --scope user AltiumAgent *> $null } catch {}
-    & claude mcp add --scope user AltiumAgent -- $Exe
-    if ($LASTEXITCODE -ne 0) { throw "claude mcp add failed." }
-} else {
-    & $VPy -c @"
+& $VPy -c @"
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
@@ -59,15 +65,15 @@ data.setdefault('mcpServers', {})['AltiumAgent'] = {'type': 'stdio', 'command': 
 p.write_text(json.dumps(data, indent=2), encoding='utf-8')
 print('Registered AltiumAgent in', p)
 "@ $Cfg $Exe
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Registering in $Cfg failed. The Altium scripts are installed; register by hand with:"
+    Write-Warning "  claude mcp add --scope user AltiumAgent -- `"$Exe`""
 }
 
-# 4. The Altium side: copy and stamp the script project to %USERPROFILE%\Altium Agent\scripts
-& $Exe install-scripts --force
-if ($LASTEXITCODE -ne 0) { throw "install-scripts failed." }
 Write-Host ""
 Write-Host "In Altium: stop and close any other script project (e.g. eda-agent's Altium_API.PrjScr), then"
-Write-Host "File > Run Script... > browse to $env:USERPROFILE\Altium Agent\scripts\AltiumAgent.PrjScr"
-Write-Host "> Dispatcher.pas > StartMCPServer > Run. The window must say 'Altium Agent MCP'."
+Write-Host "File > Run Script... > browse to $Scripts\AltiumAgent.PrjScr"
+Write-Host "> Dispatcher.pas > StartMCPServer > Run. The window is titled 'Altium Agent'."
 
 # 5. Check
 Write-Host ""

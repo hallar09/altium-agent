@@ -66,7 +66,7 @@ class PowerIntegrityThermalViaService:
             f"- Target temperature rise at the interface: {delta_temp_c:.2f} C",
         ]
         method = thermal_method()
-        lines.append(f"- Method: {method['method']} — {method['accuracy']}")
+        lines.append(f"- Method: {method['method']} ({method['accuracy']})")
         lines.append(f"- {format_solver_verdict(method)}")
         if not method["solver_grade"]:
             lines.append(f"- Note: {method['note']}")

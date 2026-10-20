@@ -2,7 +2,7 @@
 # Copyright (c) 2026 altium-mcp-pro contributors
 # From altium-mcp-pro formats/pcbdoc.py. Modified for Altium Agent (2026): see
 # docs/PROVENANCE.md and THIRD_PARTY_NOTICES.md.
-"""Reader for Altium PCB documents (.PcbDoc) — no Altium installation required.
+"""Reader for Altium PCB documents (.PcbDoc): no Altium installation required.
 
 Text streams (Board6, Components6, Nets6, Classes6, Rules6, Polygons6, DifferentialPairs6) are
 ``|KEY=VALUE`` records. Primitive streams (Tracks6, Vias6, Arcs6, Pads6, Texts6) are binary; the

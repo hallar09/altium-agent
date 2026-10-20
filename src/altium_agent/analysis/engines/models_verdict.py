@@ -31,7 +31,7 @@ def stable_finding_id(*parts: object) -> str:
     """Return a deterministic, diffable short id from rule + location parts.
 
     The id is a hash of the supplied parts (typically a rule/type and a location or
-    description), so the same finding keeps the same id across runs — letting an agent
+    description), so the same finding keeps the same id across runs, letting an agent
     prove a fix worked by diffing finding ids rather than re-reading prose.
     """
     raw = "|".join(str(part) for part in parts)

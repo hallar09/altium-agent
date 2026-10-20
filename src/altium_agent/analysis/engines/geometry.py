@@ -188,7 +188,7 @@ def parse_justify(tokens: str | Iterable[str] | None) -> frozenset[str]:
     """Normalise a KiCad ``(justify …)`` token list into a frozenset.
 
     Accepts the raw inner string (``"left bottom"``) or an iterable. Mirroring
-    (``mirror``) and unknown tokens are dropped — only positional anchors matter
+    (``mirror``) and unknown tokens are dropped; only positional anchors matter
     for a bounding box.
     """
     if tokens is None:
@@ -235,7 +235,7 @@ def boxes_overlap_pairs(
 ) -> list[tuple[str, str, float]]:
     """Return ``(ref_a, ref_b, overlap_area)`` for every overlapping labelled box.
 
-    A stable O(n²) sweep — schematic sheets hold tens to low hundreds of objects,
+    A stable O(n²) sweep: schematic sheets hold tens to low hundreds of objects,
     so the simple form is preferred over an interval tree for determinism and
     clarity. Pairs are emitted in input order; ``gap_mm`` treats near-touching
     boxes as overlapping (area is the raw geometric intersection, which may be 0

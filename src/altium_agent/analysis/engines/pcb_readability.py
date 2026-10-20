@@ -16,9 +16,9 @@ assemble, surfaced before the authoritative DRC run.
 
 Findings (advisory; DRC remains the sign-off authority):
 
-* ``offboard_component`` — a footprint body extends past the board outline.
-* ``ref_silk_overlap``    — two reference designators overlap on the silkscreen.
-* ``body_overlap``        — two footprint bodies overlap (INFO; DRC courtyard is
+* ``offboard_component``: a footprint body extends past the board outline.
+* ``ref_silk_overlap``: two reference designators overlap on the silkscreen.
+* ``body_overlap``: two footprint bodies overlap (INFO; DRC courtyard is
   the precise check).
 """
 

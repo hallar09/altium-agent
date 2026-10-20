@@ -89,7 +89,7 @@ class PowerIntegrityVoltageDropService:
             f"FAIL > {fail_temp_c:.1f} C)",
         ]
         method = ir_drop_method()
-        lines.append(f"- Method: {method['method']} — {method['accuracy']}")
+        lines.append(f"- Method: {method['method']} ({method['accuracy']})")
         lines.append(f"- {format_solver_verdict(method)}")
         if not method["solver_grade"]:
             lines.append(f"- Note: {method['note']}")

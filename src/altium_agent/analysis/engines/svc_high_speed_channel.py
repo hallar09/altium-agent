@@ -47,7 +47,7 @@ def _format_channel_result(metrics: ChannelMetrics, max_insertion_loss_db: float
         f"({metrics.eye_height_ratio * 100.0:.1f}% of drive amplitude)",
     ]
     method = channel_method(metrics.source == "ngspice")
-    lines.append(f"- Method: {method['method']} — {method['accuracy']}")
+    lines.append(f"- Method: {method['method']} ({method['accuracy']})")
     lines.append(f"- {format_solver_verdict(method)}")
     lines.extend(f"- {note}" for note in metrics.notes)
     if not method["solver_grade"]:

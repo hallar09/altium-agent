@@ -5,7 +5,7 @@
 # Altium Agent (2026): see docs/PROVENANCE.md and THIRD_PARTY_NOTICES.md.
 """Component derating and approved-vendor (AVL) checks (work order P4-T3).
 
-Derating keeps a part operating below its absolute ratings for reliability — e.g. a
+Derating keeps a part operating below its absolute ratings for reliability, e.g. a
 ceramic capacitor used at <=80% of its rated voltage. These are conservative,
 general-practice factors (widely used industry rules of thumb), NOT a specific
 MIL-HDBK-217 / IPC mandate; the verdict says so. AVL enforcement flags a selected
@@ -72,19 +72,19 @@ def derating_check(
         verdict: ComplianceVerdict = "FAIL"
         summary = (
             f"{kind} {parameter}: operating {operating_value:g} EXCEEDS absolute rating "
-            f"{rated_value:g} (utilization {utilization:.0%}) — overstress."
+            f"{rated_value:g} (utilization {utilization:.0%}): overstress."
         )
     elif utilization > limit:
         verdict = "FAIL"
         summary = (
             f"{kind} {parameter}: utilization {utilization:.0%} exceeds the {limit:.0%} "
-            "derating limit — reliability risk; pick a higher-rated part."
+            "derating limit: reliability risk; pick a higher-rated part."
         )
     elif utilization > limit * _WARN_BAND:
         verdict = "WARN"
         summary = (
             f"{kind} {parameter}: utilization {utilization:.0%} is close to the {limit:.0%} "
-            "derating limit — little margin."
+            "derating limit: little margin."
         )
     else:
         verdict = "PASS"
@@ -98,7 +98,7 @@ def derating_check(
 def avl_check(manufacturer: str, approved_vendors: list[str]) -> tuple[ComplianceVerdict, str]:
     """Check a part's manufacturer against the approved-vendor list."""
     if not approved_vendors:
-        return ("WARN", "No approved-vendor list configured — AVL not enforced.")
+        return ("WARN", "No approved-vendor list configured; AVL not enforced.")
     if not manufacturer.strip():
         return ("WARN", "Part has no manufacturer to check against the AVL.")
     needle = manufacturer.strip().casefold()

@@ -6,7 +6,7 @@
 """Field-solver adapter seam for impedance/coupling (work order P3-T1).
 
 The impedance/coupling path uses published quasi-static closed-form formulas
-(IPC-2141 / Wheeler-class). Those are first-order estimates — good to a few
+(IPC-2141 / Wheeler-class). Those are first-order estimates, good to a few
 percent, **not** a 2D field-solver result. This module is the seam where a real
 solver (FEMM, atlc, a boundary-element method, or a hosted service) would plug in.
 

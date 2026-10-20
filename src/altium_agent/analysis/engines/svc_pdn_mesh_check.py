@@ -78,7 +78,7 @@ class PowerIntegrityPdnMeshService:
         lines.extend(f"- IMPEDANCE FAIL: {item}" for item in result.impedance_violations)
         lines.extend(f"- Recommendation: {item}" for item in result.recommendations)
         mesh_method = pdn_mesh_method()
-        lines.append(f"- Method: {mesh_method['method']} — {mesh_method['accuracy']}")
+        lines.append(f"- Method: {mesh_method['method']} ({mesh_method['accuracy']})")
         lines.append(f"- {format_solver_verdict(mesh_method)}")
         verdict: Verdict = "FAIL" if result.violations or result.impedance_violations else "PASS"
         return VerdictReport.from_text_verdict(

@@ -55,7 +55,7 @@ class PowerIntegrityThermalPlaneService:
             f"(ambient {payload.ambient_c:.1f} C)",
         ]
         method = thermal_fd_method()
-        lines.append(f"- Method: {method['method']} — {method['accuracy']}")
+        lines.append(f"- Method: {method['method']} ({method['accuracy']})")
         lines.append(f"- {format_solver_verdict(method)}")
         return VerdictReport.from_text_verdict(
             text="\n".join(lines),

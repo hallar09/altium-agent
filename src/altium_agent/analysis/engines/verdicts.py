@@ -5,7 +5,7 @@
 # Altium Agent (2026): see docs/PROVENANCE.md and THIRD_PARTY_NOTICES.md.
 """Shared three-level verdict helper for analysis gates (work order P1-T3).
 
-A gate that can only return PASS or WARN is not a gate — it can never block a bad
+A gate that can only return PASS or WARN is not a gate: it can never block a bad
 design. These helpers give every gate a real ``FAIL`` band: PASS within budget, WARN
 in a marginal band, FAIL once the value clearly exceeds the budget.
 """

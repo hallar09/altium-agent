@@ -6,7 +6,7 @@
 """Solver adapter seams for power-integrity and thermal analysis (work order P3-T2/P3-T4).
 
 Like the field-solver seam for impedance (:mod:`kicad_mcp.utils.field_solver`), the
-power-integrity and thermal tools use first-order, lumped/closed-form estimates — not a
+power-integrity and thermal tools use first-order, lumped/closed-form estimates, not a
 distributed IR-drop / current-density solve (P3-T2) or a thermal-network / FEA solve
 (P3-T4). This module is the seam where a real solver plugs in. Until one is wired, the
 ``*_available`` probes return ``False`` and callers label results with the honest method
@@ -143,7 +143,7 @@ def pdn_mesh_method() -> dict[str, Any]:
 
     Unlike the single-trace lumped estimate (:func:`ir_drop_method`), this is a genuine
     multi-load resistive network solve with frequency-domain PDN impedance, so it is
-    solver-grade — but it models traces as 1-D equivalent resistances, not a 2-D
+    solver-grade, but it models traces as 1-D equivalent resistances, not a 2-D
     copper-plane field solver.
     """
     return {

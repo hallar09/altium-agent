@@ -127,10 +127,14 @@ def _widths(doc: PcbDocument) -> dict:
 
 
 def _vias(doc: PcbDocument) -> dict:
-    sizes = Counter((round(v.diameter, 3), round(v.hole, 3)) for v in doc.vias if v.component == NONE16)
+    free = [v for v in doc.vias if v.component == NONE16]
+    sizes = Counter((round(v.diameter, 3), round(v.hole, 3)) for v in free)
+    known = [v for v in free if v.tent_top is not None]
+    tent = {"top_share": round(sum(bool(v.tent_top) for v in known) / len(known), 3) if known else None,
+            "bottom_share": round(sum(bool(v.tent_bottom) for v in known) / len(known), 3) if known else None}
     return {"count": sum(sizes.values()),
             "sizes": [{"diameter_mm": d, "hole_mm": h, "count": n} for (d, h), n in sizes.most_common(6)],
-            "tenting": "not read from the file (check the solder mask rules)"}
+            "tenting": tent}
 
 
 def _rules(doc: PcbDocument) -> dict:

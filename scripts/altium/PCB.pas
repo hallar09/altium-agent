@@ -11845,6 +11845,141 @@ Begin
             + 'Mask Expansion rule scoped IsVia covers every via at once '
             + 'instead, including vias placed later.')));
 End;
+{..............................................................................}
+{ PCB_SetViaTenting - Tent (or untent) free vias on top and/or bottom, and     }
+{ read every one back. Altium Agent, phase (d).                                }
+{ Params: net (optional), diameter_mils (optional; within 0.5 mil), top and   }
+{ bottom ("true"/"false"; empty leaves that side), dry_run ("true": change    }
+{ nothing, report the current state).                                         }
+{ AD26 ignores IsTenting_Top/Bottom while the via's mask expansion follows   }
+{ the rule, so the mode is set to manual first (linter AA102). The values    }
+{ are read back through GetState_IsTenting_*, as Audit.pas reads them.       }
+{ UNVERIFIED LIVE: run RELEASE_VERIFICATION A15 on a copy with one via first. }
+{..............................................................................}
+
+Function PCB_SetViaTenting(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Iterator : IPCB_BoardIterator;
+    Via : IPCB_Via;
+    Prim : IPCB_Primitive;
+    Matches : TInterfaceList;
+    I, Matched, Changed, Verified, TentTopBefore, TentBotBefore, Failed : Integer;
+    NetFilter, NetName, DiaStr, TopStr, BotStr, DryStr, Bad : String;
+    DiaMils : Double;
+    WantTop, WantBot, SetTop, SetBot, DryRun, Ok : Boolean;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+    NetFilter := ExtractJsonValue(Params, 'net');
+    DiaStr := ExtractJsonValue(Params, 'diameter_mils');
+    TopStr := LowerCase(ExtractJsonValue(Params, 'top'));
+    BotStr := LowerCase(ExtractJsonValue(Params, 'bottom'));
+    DryStr := LowerCase(ExtractJsonValue(Params, 'dry_run'));
+    DryRun := DryStr = 'true';
+    SetTop := (TopStr = 'true') Or (TopStr = 'false');
+    SetBot := (BotStr = 'true') Or (BotStr = 'false');
+    WantTop := TopStr = 'true';
+    WantBot := BotStr = 'true';
+    If (Not DryRun) And (Not SetTop) And (Not SetBot) Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'MISSING_PARAM',
+            'top or bottom ("true"/"false") required unless dry_run');
+        Exit;
+    End;
+    DiaMils := -1;
+    If DiaStr <> '' Then DiaMils := StrToFloatDef(DiaStr, -1);
+
+    Matches := CreateObject(TInterfaceList);
+    Iterator := Board.BoardIterator_Create;
+    Try
+        Iterator.AddFilter_ObjectSet(MkSet(eViaObject));
+        Iterator.AddFilter_LayerSet(AllLayers);
+        Iterator.AddFilter_Method(eProcessAll);
+        Via := Iterator.FirstPCBObject;
+        While Via <> Nil Do
+        Begin
+            NetName := '';
+            Try If Via.Net <> Nil Then NetName := Via.Net.Name; Except End;
+            If ((NetFilter = '') Or (UpperCase(NetName) = UpperCase(NetFilter)))
+                And ((DiaMils < 0) Or (Abs(CoordToMils(Via.Size) - DiaMils) <= 0.5)) Then
+                Matches.Add(Via);
+            Via := Iterator.NextPCBObject;
+        End;
+    Finally
+        Board.BoardIterator_Destroy(Iterator);
+    End;
+
+    Matched := Matches.Count;
+    Changed := 0;
+    Verified := 0;
+    Failed := 0;
+    TentTopBefore := 0;
+    TentBotBefore := 0;
+    Bad := '';
+    For I := 0 To Matches.Count - 1 Do
+    Begin
+        Prim := Matches.Items[I];
+        If Prim = Nil Then Continue;
+        Via := Prim;
+        If Via.GetState_IsTenting_Top Then Inc(TentTopBefore);
+        If Via.GetState_IsTenting_Bottom Then Inc(TentBotBefore);
+    End;
+
+    If (Not DryRun) And (Matched > 0) Then
+    Begin
+        PCBServer.PreProcess;
+        Try
+            For I := 0 To Matches.Count - 1 Do
+            Begin
+                Prim := Matches.Items[I];
+                If Prim = Nil Then Continue;
+                Via := Prim;
+                Try
+                    PCBServer.SendMessageToRobots(Via.I_ObjectAddress, c_Broadcast,
+                        PCBM_BeginModify, c_NoEventData);
+                    Via.SolderMaskExpansionMode := eMaskExpansionMode_Manual;
+                    If SetTop Then Via.IsTenting_Top := WantTop;
+                    If SetBot Then Via.IsTenting_Bottom := WantBot;
+                    PCBServer.SendMessageToRobots(Via.I_ObjectAddress, c_Broadcast,
+                        PCBM_EndModify, c_NoEventData);
+                    Via.GraphicallyInvalidate;
+                    Inc(Changed);
+                Except
+                    Inc(Failed);
+                End;
+                Ok := ((Not SetTop) Or (Via.GetState_IsTenting_Top = WantTop))
+                    And ((Not SetBot) Or (Via.GetState_IsTenting_Bottom = WantBot));
+                If Ok Then Inc(Verified)
+                Else If Length(Bad) < 1500 Then
+                Begin
+                    If Bad <> '' Then Bad := Bad + ',';
+                    Bad := Bad + '[' + FloatToJsonStr(CoordToMils(Via.x)) + ','
+                        + FloatToJsonStr(CoordToMils(Via.y)) + ']';
+                End;
+            End;
+        Finally
+            PCBServer.PostProcess;
+        End;
+        If Changed > 0 Then MarkDocDirtyByPath(Board.FileName);
+    End;
+
+    Result := BuildSuccessResponse(RequestId, JsonObj(
+        JsonInt('vias_matched', Matched) + ','
+        + JsonInt('tented_top_before', TentTopBefore) + ','
+        + JsonInt('tented_bottom_before', TentBotBefore) + ','
+        + JsonBool('dry_run', DryRun) + ','
+        + JsonInt('vias_changed', Changed) + ','
+        + JsonInt('vias_failed', Failed) + ','
+        + JsonInt('vias_verified', Verified) + ','
+        + JsonRaw('mismatched_at_mils', '[' + Bad + ']') + ','
+        + JsonStr('file', Board.FileName)));
+End;
+
 Function PCB_SetMechLayerKind(Params : String; RequestId : String) : String;
 Var
     Board : IPCB_Board;
@@ -17431,6 +17566,7 @@ Begin
         'get_polygons':            Result := PCB_GetPolygons(Params, RequestId);
         'calc_polygon_area':       Result := PCB_CalcPolygonArea(Params, RequestId);
         'set_via_soldermask_relief': Result := PCB_SetViaSoldermaskRelief(Params, RequestId);
+        'set_via_tenting':         Result := PCB_SetViaTenting(Params, RequestId);
         'get_mech_layer_names':    Result := PCB_GetMechLayerNames(Params, RequestId);
         'modify_polygon':          Result := PCB_ModifyPolygon(Params, RequestId);
         'get_room_rules':          Result := PCB_GetRoomRules(Params, RequestId);

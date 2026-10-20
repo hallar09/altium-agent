@@ -159,6 +159,10 @@ class Via:
     layer_start: int
     layer_end: int
     component: int = NONE16
+    # Altium Agent: the solder-mask tent flags of the via record (first flags byte:
+    # 0x20 top, 0x40 bottom); checked on the Altium samples, where tented vias read 0x6c.
+    tent_top: bool | None = None
+    tent_bottom: bool | None = None
 
 
 @dataclass
@@ -531,13 +535,16 @@ def _vias(raw: bytes, o: _Origin) -> list[Via]:
     out = []
     for p in _binary_records(raw, 3):
         r = BinaryReader(p)
-        r.skip(3)
+        r.skip(1)
+        flags1 = r.u8()
+        r.skip(1)
         net = r.u16(); r.u16(); comp = r.u16()  # noqa: E702  (net, polygon, component - as tracks)
         r.skip(4)
         x, y = r.i32(), r.i32()
         dia, hole = r.i32(), r.i32()
         ls, le = r.u8(), r.u8()
-        out.append(Via(net, o.x(x), o.y(y), pcb_units_to_mm(dia), pcb_units_to_mm(hole), ls, le, comp))
+        out.append(Via(net, o.x(x), o.y(y), pcb_units_to_mm(dia), pcb_units_to_mm(hole), ls, le, comp,
+                       tent_top=bool(flags1 & 0x20), tent_bottom=bool(flags1 & 0x40)))
     return out
 
 

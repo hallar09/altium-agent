@@ -61,7 +61,15 @@ print('Registered AltiumAgent in', p)
 "@ $Cfg $Exe
 }
 
-# 4. Check
+# 4. The Altium side: copy and stamp the script project to %USERPROFILE%\Altium Agent\scripts
+& $Exe install-scripts --force
+if ($LASTEXITCODE -ne 0) { throw "install-scripts failed." }
+Write-Host ""
+Write-Host "In Altium: stop and close any other script project (e.g. eda-agent's Altium_API.PrjScr), then"
+Write-Host "File > Run Script... > browse to $env:USERPROFILE\Altium Agent\scripts\AltiumAgent.PrjScr"
+Write-Host "> Dispatcher.pas > StartMCPServer > Run. The window must say 'Altium Agent MCP'."
+
+# 5. Check
 Write-Host ""
 Write-Host "Doctor (needs Altium running with the AltiumAgent script started to pass fully):"
 & $Exe doctor

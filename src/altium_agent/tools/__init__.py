@@ -44,6 +44,7 @@ from .agent import register_agent_tools
 from .offline import register_offline_tools
 from .house_style import register_house_style_tools
 from .routing_broker import register_routing_broker_tools
+from .design_gates import register_design_gate_tools
 
 # Altium Agent drives Altium Designer only. The backend switch of
 # eda-agent (kicad / easyeda / both) was removed; the names stay so callers
@@ -204,6 +205,8 @@ def _register_full(mcp, backend: str = DEFAULT_BACKEND) -> str:
     register_house_style_tools(mcp)
     # The routing broker (phase d).
     register_routing_broker_tools(mcp)
+    # Gate reviews, undo to a stage, design_status (phase e).
+    register_design_gate_tools(mcp)
     return backend
 
 
@@ -228,6 +231,7 @@ __all__ = [
     "register_offline_tools",
     "register_house_style_tools",
     "register_routing_broker_tools",
+    "register_design_gate_tools",
     "register_project_tools",
     "register_library_tools",
     "register_generic_tools",

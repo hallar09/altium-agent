@@ -113,6 +113,7 @@ TOOL_PREFIXES = tuple(prefix for prefix, _ in _CATEGORY_BY_PREFIX)
 # handler, and a tool is only covered when EVERY command it sends is,
 # because one unanswered call ends the run just as surely.
 _SIMULATOR_TOOLS = frozenset({
+    "design_undo_to_stage",
     "app_context", "app_detach", "app_get_active_document",
     "app_get_version",
     "app_list_documents", "app_set_active_document",
@@ -187,6 +188,8 @@ _CALC_NEEDS_BRIDGE = frozenset({"pcb_calc_polygon_area"})
 # design tools are the explicit exceptions in _DESIGN_BRIDGE below.
 _DESIGN_BRIDGE = frozenset(
     {
+        # Altium Agent: closes and reopens the project in Altium around the restore.
+        "design_undo_to_stage",
         "design_execute_plan",
         "design_audit_schematic",
         "design_validate",

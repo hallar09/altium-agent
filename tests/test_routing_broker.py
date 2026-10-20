@@ -335,3 +335,118 @@ def test_real_freerouting_batch_on_kame(tmp_path):
            extra=("--router.fanout.enabled=false", "--router.autorouter.ignore_net_classes=AGENT_FIXED"))
     rows = ses_rows(ses, e.layer_map, e.rules, doc.origin_mil, existing=doc, only_nets=set(nets))
     assert rows.tracks and rows.nets <= set(nets)
+
+
+# ---------------------------------------------------------------- Situs and the project policy
+
+@needs_kame
+def test_plan_finishes_with_situs_and_policy_can_forbid_freerouting(tmp_path, monkeypatch):
+    from altium_agent.routing import service as rsvc
+
+    doc = _stripped(read_pcbdoc(Path(KAME_PCB)))
+    p = plan(doc, freerouting_ready=True)
+    tools = [s["tool"] for s in p["steps"]]
+    assert tools.index("route_situs") == tools.index("pcb_repour_polygons") - 1
+    assert "route_situs" not in [s["tool"] for s in plan(doc, engines=["inhouse"], freerouting_ready=True)["steps"]]
+    (tmp_path / "altium_agent.json").write_text('{"routing": {"third_party_engines": false}}')
+    pol = rsvc.project_policy(tmp_path)
+    assert pol["third_party_engines"] is False and pol["source"].endswith("altium_agent.json")
+    assert rsvc.project_policy(tmp_path / "none")["third_party_engines"] is True
+    (tmp_path / "altium_agent.json").write_text("{nope")
+    from altium_agent.offline.errors import InvalidArgument
+
+    with pytest.raises(InvalidArgument):
+        rsvc.project_policy(tmp_path)
+
+
+def test_freerouting_refused_by_project_policy(tmp_path, monkeypatch):
+    import altium_agent.bridge as bridge_mod
+
+    (tmp_path / "altium_agent.json").write_text('{"routing": {"third_party_engines": false}}')
+    monkeypatch.setattr(bridge_mod, "get_bridge", lambda: (_ for _ in ()).throw(AssertionError("no bridge")))
+    r = asyncio.run(_tools().get("route_freerouting").fn(expect_file=str(tmp_path / "b.PcbDoc")))
+    assert "forbids third-party" in r["refused"]
+
+
+def test_route_situs_polls_until_the_copper_settles(monkeypatch):
+    import altium_agent.bridge as bridge_mod
+    from altium_agent.tools import routing_broker as rb
+
+    counts = iter([10, 20, 25, 25, 25, 25])
+    sent = []
+
+    class B:
+        async def send_command_async(self, cmd, params, timeout=None):
+            sent.append(cmd)
+            if cmd == "pcb.get_layout_model":
+                return {"file": "C:/mine/b.PcbDoc"}
+            if cmd == "pcb.route_status":
+                n = next(counts)
+                return {"tracks": n, "arcs": 0, "vias": n // 5}
+            return {"ok": True}
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(bridge_mod, "get_bridge", lambda: B())
+    monkeypatch.setattr(rb.asyncio, "sleep", no_sleep)
+    r = asyncio.run(_tools().get("route_situs").fn(expect_file="C:/mine/b.PcbDoc"))
+    assert r["settled"] and r["copper"]["tracks"] == 25 and r["polls"] == 5
+    assert sent[1] == "pcb.situs_route" and sent[-1] == "application.save_document"
+
+
+# ---------------------------------------------------------------- reference copy (BoardKit's refcopy)
+
+@needs_kame
+def test_refcopy_puts_back_exactly_what_was_taken_up():
+    from altium_agent.routing.refcopy import plan_copy
+
+    ref = read_pcbdoc(Path(KAME_PCB))
+    nets = ["UART7_TX_MB", "UART7_RX_MB", "SPWR_ON"]
+    target = copy.deepcopy(ref)
+    gone = {i for i, n in enumerate(target.nets) if n in nets}
+    removed_t = [t for t in target.tracks if t.net in gone and t.component == NONE16 and t.polygon == NONE16]
+    removed_v = [v for v in target.vias if v.net in gone and v.component == NONE16]
+    target.tracks = [t for t in target.tracks if t not in removed_t]
+    target.vias = [v for v in target.vias if v not in removed_v]
+    rows = plan_copy(ref, target, nets)
+    assert rows.moved_parts == [] and rows.unknown_nets == []
+    assert len(rows.tracks) - rows.from_arcs == len(removed_t) and len(rows.vias) == len(removed_v)
+    assert rows.nets == set(nets)
+    again = plan_copy(ref, ref, nets)            # copying onto a board that has it writes nothing
+    assert again.tracks == [] and again.skipped_existing > 0
+    x = float(rows.tracks[0].split(",")[0])      # absolute mils: the board origin is added
+    assert x > ref.origin_mil[0] - 700
+
+
+@needs_kame
+def test_refcopy_refuses_moved_parts_and_copies_an_escape():
+    from altium_agent.routing.refcopy import plan_copy
+
+    ref = read_pcbdoc(Path(KAME_PCB))
+    moved = copy.deepcopy(ref)
+    c = next(c for c in moved.components if c.designator == "U12")
+    c.x_mm += 0.5
+    r = plan_copy(ref, moved, None, escape="U12")
+    assert [m["ref"] for m in r.moved_parts] == ["U12"] and r.tracks == []
+    stripped = _stripped(ref)
+    esc = plan_copy(ref, stripped, None, escape="U12", margin_mm=0.5)
+    assert esc.tracks and esc.moved_parts == []
+    assert plan_copy(ref, stripped, ["NO_SUCH_NET"]).unknown_nets == ["NO_SUCH_NET"]
+
+
+@needs_kame
+def test_broker_sees_reference_placement_and_seeds_the_escape(tmp_path):
+    ref = read_pcbdoc(Path(KAME_PCB))
+    p = plan(_stripped(ref), freerouting_ready=True, reference=ref)
+    assert p["reference_placement"] is True
+    esc = next(s for s in p["steps"] if s["tool"] == "route_refcopy")
+    assert esc["args"]["escape"] == "U12"
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps(p))
+    a, b = p["routed_by_plan"][:2]
+    r = converge(p, {"violations": [_v(a, b)]}, plan_path=path)
+    assert [s["tool"] for s in r["steps"]][:2] == ["pcb_unroute", "route_refcopy"]
+    moved = copy.deepcopy(_stripped(ref))
+    moved.components[0].x_mm += 1
+    assert plan(moved, reference=ref)["reference_placement"] is False

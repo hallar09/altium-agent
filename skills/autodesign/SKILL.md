@@ -1,88 +1,84 @@
 ---
 name: autodesign
-description: Drive an autonomous spec-to-board PCB design in Altium Designer with the altium-agent MCP server. Apply when the user asks to design a board/schematic from a requirement, wants an end-to-end autonomous design run, or mentions the design harness, design_next_action, design sessions, or spec-to-board. Requires the altium-agent MCP server connected to a running Altium Designer with the bridge script attached.
+description: Design a new PCB in Altium Designer from a requirement with the AltiumAgent MCP server (schematic, placement, routing, review). Use when asked to design a board from scratch or run a spec-to-board design.
 ---
 
-# Autonomous PCB design (altium-agent)
+# Design a board from a requirement (AltiumAgent)
 
-Drive a full spec-to-board design by looping the server-side state machine.
-The server owns sequencing, gates, and durable state, so you never memorize
-the workflow: you call `design_next_action`, do what it says, log the
-result, and repeat. A weaker model produces a plainer board, never a broken
-pipeline, because the integrity lives server-side.
+The server owns the sequence, the gates and the durable state; you do each
+stage, look at the result, and record it. A run survives context loss: the
+session journal, not the chat, is the truth.
 
-## Before you start
+## Rules that are never bent
 
-- Confirm Altium is actually answering, with `app_ping`. Ping, not `app_get_status`: status reports
-  that the process exists and that something once called attach, and
-  neither of those proves the bridge replies. If it does not answer, tell
-  the user how to start it; don't guess.
-- Read `design_get_discipline` once: the hard rules and the DesignPlan
-  schema. Or call `design_autonomy_guide` for the full protocol + the 13
-  stages with their tools and exit gates.
+- Work only in a project folder of the user's (never under
+  `%PUBLIC%\Documents\Altium` or `Program Files`; the tools refuse those).
+- Never start Altium. If it does not answer: `app_diagnose`, then
+  `app_recover` for what it offers, else tell the user exactly what to click.
+- Never call the design manufacturing-ready. No Gerbers, drill, pick-and-place
+  or fab packages without the user's explicit approval.
+- Datasheet first: every device fact (pinout, decoupling, layout rules,
+  absolute maximums) cited from the manufacturer's datasheet
+  (`lib_fetch_datasheet`, `design_datasheet_checklist`). Never invent one.
+- Freerouting (GPL) runs only as the user's own install, only if the project
+  allows third-party engines (`route_engines` says).
+- A tool badged `live_unverified` may be wrong: confirm what it claims (read
+  back, render, measure) before building on it, and tell the user when it
+  misbehaves.
+
+## Start
+
+1. `app_ping` (Altium really answers; a status read does not prove it), then
+   `app_diagnose` (one instance, no dialog, the script running), `tool_guide`,
+   `design_autonomy_guide` once.
+2. Agree the requirement with the user in ONE message: what you will assume,
+   and only the questions you cannot settle yourself.
+3. `proj_create` in the user's folder, then
+   `design_session_start(requirement, project=<.PrjPcb>, profile=<style, if any>)`.
+   From now on every `design_session_log(event="stage_enter")` checkpoints the
+   project; `design_undo_to_stage` goes back to any stage in one call.
 
 ## The loop
 
-1. `design_session_start(requirement)` opens the durable journal. Keep the
-   returned `session_id`; every later call takes it. Then `design_live_view`
-   so the user can watch the board change, and record each decision with
-   its reason before acting on it (`design_live_note`).
-2. If a project is open or will be modified, checkpoint first so the whole
-   run is revertible in one step: `app_checkpoint("before autonomous run")`.
-3. Loop: `design_next_action(session_id)` and act on `status`:
-   - **proceed / retry**: do the stage using its `suggested_tools` until the
-     `exit_gate` is met, then
-     `design_session_log(event="stage_result", stage=<stage>, status="ok")`.
-     Where the gate names numbers (placement, routing, pours, verification),
-     measure them with `pcb_layout_audit` and pass the result as `data=`:
-     the harness checks them and sends the stage back if one fails.
-     If you cannot finish without the user, log `status="blocked"` with a
-     question and stop.
-   - **blocked**: put `open_question` to the user; when answered,
-     `design_session_log(event="resolved", text=<answer>)` and continue.
-   - **complete**: the 13 stages are done; write the design report with
-     `design_session_report` and review outputs with the user.
-4. Checkpoint again before each high-risk mutating stage: `sch_to_pcb`,
-   `routing`, `pours_tuning`.
-5. Long engine runs (routing a dense board) can exceed the tool timeout;
-   start them with `design_job_start` and poll `design_job_status` /
-   `design_job_result`.
+`design_next_action` -> do the stage with its `suggested_tools` -> check its
+exit gate -> `design_session_log(event="stage_result", status="ok", data=<numbers>)`.
+`blocked` -> ask the user, then `design_session_log(event="resolved")`.
+A stage that fails 3 times escalates to a question for the user by itself:
+surface it, do not loop past it.
+Save in Altium before every gate, stage entry and status call: the reviews
+read the saved files.
 
-Bounded retries: a stage that fails 3 times escalates to a human question
-automatically. Don't loop past it; surface it.
+| Stage | Do | Gate |
+|---|---|---|
+| requirement, architecture | `design_validate_requirement`; parts with `lib_search_parts` / `lib_fetch_part` (in stock), datasheets fetched | user agrees the block diagram and the parts |
+| plan, plan_verification | DesignPlan: `design_list_circuit_blocks`, `design_add_circuit_block`, `design_add_part`; `design_validate_plan`, `design_review_plan` | plan validates; every IC's decoupling and every interface from its datasheet |
+| library_readiness | missing symbols and footprints: `lib_create_*`; footprints checked against the package drawing with `lib_check_package` and `lib_render_package` | no unverified footprint |
+| schematic_emit | `design_execute_plan`; `proj_compile`, `proj_run_erc`, `design_audit_schematic`; `design_generate_bom` | ERC 0 errors; `design_gate_review(gate="schematic")` answered |
+| sch_to_pcb | `proj_sync_pcb` (its ECO dialog is answered by the dialog driver); `analyze_sch_pcb_sync` | every net and part on the board |
+| rules_stackup | `pcb_set_board_shape`; layers (`pcb_add_layer`, `pcb_modify_layer`, `analyze_si_generate_stackup` for impedance); rules (`pcb_create_design_rule`), diff pairs (`pcb_create_diff_pair`, `pcb_get_diff_pair_rules`) | rules match the fab profile (`analyze_dfm_use_profile`) |
+| placement | `place_plan` (answer its antenna questions; `profile=` for a house style), `place_check` until clean, `place_apply(confirm=true)` | `design_gate_review(gate="placement")` answered, no error marker |
+| routing | `route_broker_plan` and its steps in order (pairs, critical nets, bulk by Freerouting or in-house), `pcb_repour_polygons`, `pcb_run_drc`, `route_converge` until done | 0 unrouted, 0 copper DRC; pairs within the skew asked for; `design_gate_review(gate="routing")` answered |
+| pours_tuning | ground pours, stitching (`pcb_place_stitching_vias`), `route_via_style` and `route_set_via_tenting` to the style | via style matches, tenting verified from the file |
+| verification | `pcb_run_drc`, `analyze_drc_report`, `analyze_board_review`, `analyze_dfm`, `design_status` | `design_gate_review(gate="verification")` answered; open issues listed, none hidden |
+| outputs | only with the user's explicit approval | `design_session_report` written |
 
-## How the board is laid out
+## Looking
 
-The discipline's "Board layout method" is the standard: floorplan before
-placement (fixed skeleton, critical corridors, sections, one rectangle per
-sub-block in signal-flow order), each block laid out to a pattern, the
-legaliser's moves read rather than accepted, routing in stages (pairs,
-plane fan-out with dog-bones, buses as a whole, then the rest), and one
-small checked step at a time. A scattered placement means the method is
-wrong; no parameter fixes it.
+At every gate: `design_gate_review(gate)`, then Read every PNG it returns
+and answer each rubric item from the picture, citing marker numbers. Numbers
+decide pass or fail; the pictures catch what numbers miss. Never pass a gate
+with an open error marker or an unexplained ratsnest line.
 
-## Resuming
+## Checkpoints
 
-A run survives context loss. In a fresh session, call
-`design_session_resume(session_id)` (or `design_next_action`) and pick up
-from recorded state: the journal, not the chat history, is the source of
-truth.
+Every `stage_enter` takes a checkpoint of the project files (save first).
+Also take one with `app_checkpoint` (it saves Altium's open documents first)
+before each high-risk mutating stage (sch_to_pcb, routing, pours_tuning).
 
-## Hard constraints (non-negotiable)
+## When something goes wrong
 
-- **Datasheet-first**: every device fact fetched and cited from the
-  manufacturer datasheet; never fabricated. Use WebSearch/WebFetch.
-- **NDA isolation**: never mine or reference other client designs.
-- **Routing engines follow the project's policy.** Third-party engines
-  (Freerouting) run only when the project allows them; never use
-  account-gated APIs in the design loop.
-- **Verify render-and-look**, not by score alone; the visual rubric is the
-  shipping bar.
-- **No unverifiable safety tables**: ship only sourced/verified values.
-
-## Discovering tools
-
-The surface is 350+ tools. Use `tool_catalog(category=, maturity=,
-interaction=, query=)` to find the right one without loading every schema;
-`interaction="modal"` and `"partial"` flag tools that need a human or leave
-work incomplete. Run a discovered tool by name with `tool_invoke`.
+- A stage made things worse: `design_undo_to_stage(stage, confirm=true)`.
+- Altium stopped answering: `app_diagnose` -> `app_recover`.
+- A tool misbehaves: note it (`design_session_log(event="note", topic="issue")`)
+  and tell the user; try one reasonable workaround, not five.
+- `design_status` any time: stage, ERC, unrouted, DRC, DFM, style, next action.

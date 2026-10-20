@@ -58,7 +58,7 @@ def register_routing_broker_tools(mcp) -> None:
     @_offline
     def route_broker_plan(project: str | None = None, pcb: str | None = None, profile: Any = None,
                           engines: list[str] | None = None, batch_size: int = 0, max_passes: int = 50,
-                          name: str | None = None) -> dict[str, Any]:
+                          name: str | None = None, reference: str | None = None) -> dict[str, Any]:
         """Plan how to route a board: which nets, in which order, by which engine (no Altium).
 
         Differential pairs first (in-house, coupled); then clocks, crystal
@@ -78,8 +78,12 @@ def register_routing_broker_tools(mcp) -> None:
             batch_size: Freerouting nets per run; 0 = the whole bulk at once.
             max_passes: Freerouting passes per run.
             name: File name for the plan.
+            reference: The reference board of a re-layout (default the
+                profile's source). With the reference placement kept, the
+                big part's escape is copied from it first and clashing nets
+                are copied from it in route_converge (refcopy).
         """
-        return svc.route_broker_plan(project, pcb, profile, engines, batch_size, max_passes, name)
+        return svc.route_broker_plan(project, pcb, profile, engines, batch_size, max_passes, name, reference)
 
     @mcp.tool()
     @_offline
@@ -133,6 +137,12 @@ def register_routing_broker_tools(mcp) -> None:
         why = _protected(expect_file)
         if why:
             return {"ok": False, "refused": why}
+        from pathlib import Path as _P
+
+        pol = svc.project_policy(_P(expect_file).parent)
+        if not pol["third_party_engines"]:
+            return {"ok": False, "refused": f"the project's policy ({pol['source']}) forbids third-party "
+                                           "routing engines"}
         f = find()
         if f is None or not f.usable:
             return {"ok": False, "error": "Freerouting is not usable here",
@@ -255,6 +265,137 @@ def register_routing_broker_tools(mcp) -> None:
             out["repoured"] = True
         out["applied"] = True
         out["next"] = "pcb_run_drc, then route_converge with the plan and the DRC result; save when content."
+        return out
+
+    @mcp.tool()
+    async def route_refcopy(expect_file: str, reference: str, nets: list[str] | None = None,
+                            escape: str | None = None, margin_mm: float = 0.5, lock: bool = True,
+                            dry_run: bool = False, checkpoint: bool = True) -> dict[str, Any]:
+        """Copy routing from a reference board onto the focused copy (BoardKit's refcopy).
+
+        For a re-layout that keeps the reference's part positions: copies the
+        reference's own tracks, arcs (as short segments) and vias of ``nets``,
+        and the escape copper of the part ``escape`` (its nets' copper wholly
+        inside its pads' box grown by ``margin_mm``), then locks those nets.
+        Refuses when any part those nets touch is not where the reference has
+        it. Copper already on the board is not written twice. The reference
+        is only read (an Altium sample may be the reference).
+
+        Args:
+            expect_file: Full path of the focused board (your copy, saved).
+            reference: The reference .PcbDoc (or its .PrjPcb).
+            nets: Nets to copy whole.
+            escape: A part whose escape routing to copy (e.g. the big MCU).
+            margin_mm: How far round the part's pads the escape window reaches.
+            lock: Lock the copied nets' routing afterwards.
+            dry_run: Count only.
+            checkpoint: Snapshot the board folder first.
+        """
+        from pathlib import Path
+
+        from ..bridge import get_bridge
+        from ..offline.errors import OfflineError
+        from ..offline.files.pcbdoc import read_pcbdoc
+        from ..placement.service import load_board
+        from ..routing.refcopy import plan_copy
+
+        why = _protected(expect_file)
+        if why:
+            return {"ok": False, "refused": why}
+        if not nets and not escape:
+            return {"ok": False, "error": "name nets to copy, an escape part, or both"}
+        try:
+            ref = (await asyncio.to_thread(load_board, reference if reference.lower().endswith(".prjpcb") else None,
+                                           None if reference.lower().endswith(".prjpcb") else reference)).doc
+            target = await asyncio.to_thread(read_pcbdoc, Path(expect_file))
+            rows = await asyncio.to_thread(plan_copy, ref, target, nets, escape, margin_mm)
+        except (OfflineError, ValueError, FileNotFoundError) as exc:
+            return {"ok": False, "error": str(exc)}
+        out: dict[str, Any] = {"ok": True, "copy": rows.summary()}
+        if rows.unknown_nets:
+            return {"ok": False, "error": f"not nets of the reference: {rows.unknown_nets}", **out}
+        if rows.moved_parts:
+            return {"ok": False, "refused": "parts on these nets are not where the reference has them; copied "
+                                            "copper would be wrong (reference placement only)", **out}
+        if dry_run:
+            out["applied"] = False
+            return out
+        bridge = get_bridge()
+        _, err = await _focused(bridge, expect_file)
+        if err:
+            return {"ok": False, "refused": err}
+        if checkpoint:
+            from ..checkpoint import CheckpointStore
+            from ..config import get_config
+            cp = CheckpointStore(get_config().workspace_dir / "checkpoints")
+            out["checkpoint"] = cp.create(Path(expect_file).parent, label="before route_refcopy").summary()
+        placed = {"tracks": {"placed": 0, "failed": 0}, "vias": {"placed": 0, "failed": 0}}
+        for kind, cmd in (("tracks", "pcb.place_tracks"), ("vias", "pcb.place_vias")):
+            items = getattr(rows, kind)
+            for i in range(0, len(items), CHUNK):
+                r = await bridge.send_command_async(cmd, {kind: "|".join(items[i:i + CHUNK])}, timeout=300.0)
+                placed[kind]["placed"] += int((r or {}).get("placed", 0))
+                placed[kind]["failed"] += int((r or {}).get("failed", 0))
+        out.update(placed)
+        if lock and rows.nets:
+            out["locked"] = await bridge.send_command_async(
+                "pcb.lock_net_routing", {"nets": "|".join(sorted(rows.nets)), "lock": "true",
+                                         "lock_components": "false"})
+        out["applied"] = True
+        out["next"] = "Save, then pcb_run_drc and route_converge; copied nets are locked."
+        return out
+
+    @mcp.tool()
+    async def route_situs(expect_file: str, wait_s: int = 600, settle_polls: int = 3,
+                          save: bool = True) -> dict[str, Any]:
+        """Let Altium's Situs autorouter finish the connections still open (live).
+
+        Every component selected, then Route > Auto Route > Connections On
+        Selected Components: no dialog, the board's own routing strategy
+        (Route > Auto Route > Setup), locked copper left alone. Situs routes on
+        after the command returns, so this polls the copper counts until they
+        stop changing (``settle_polls`` equal readings 5 s apart, or
+        ``wait_s``), then saves. Use it as the finisher after the broker's
+        bulk step, not as a first pass on a dense board.
+
+        Args:
+            expect_file: Full path of the board; refused if another is focused.
+            wait_s: Longest wait for Situs to settle.
+            settle_polls: Equal readings in a row that count as finished.
+            save: Save the board afterwards.
+        """
+        import time as _time
+
+        from ..bridge import get_bridge
+
+        why = _protected(expect_file)
+        if why:
+            return {"ok": False, "refused": why}
+        bridge = get_bridge()
+        focused, err = await _focused(bridge, expect_file)
+        if err:
+            return {"ok": False, "refused": err}
+        start = await bridge.send_command_async("pcb.situs_route", {"expect_file": focused}, timeout=300.0)
+        last, same, polls = None, 0, 0
+        t0 = _time.monotonic()
+        while _time.monotonic() - t0 < wait_s:
+            await asyncio.sleep(5)
+            st = await bridge.send_command_async("pcb.route_status", {}, timeout=60.0)
+            polls += 1
+            now = (st or {}).get("tracks"), (st or {}).get("arcs"), (st or {}).get("vias")
+            same = same + 1 if now == last else 0
+            last = now
+            if same >= settle_polls - 1:
+                break
+        settled = same >= settle_polls - 1
+        out: dict[str, Any] = {"ok": True, "started": start, "settled": settled, "polls": polls,
+                               "copper": {"tracks": last[0], "arcs": last[1], "vias": last[2]} if last else None}
+        if not settled:
+            out["note"] = f"Situs was still changing the board after {wait_s} s; poll again or stop it in Altium."
+        if save and settled:
+            out["save"] = await bridge.send_command_async("application.save_document", {"file_path": focused},
+                                                          timeout=60.0)
+        out["next"] = "pcb_repour_polygons, pcb_run_drc, then route_converge."
         return out
 
     @mcp.tool()

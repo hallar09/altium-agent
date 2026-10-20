@@ -143,6 +143,12 @@ def converge(plan: dict, drc: Any, *, plan_path: Path | None = None, max_rounds:
             by_engine[nxt].append(net)
             state["engine"][net] = nxt
             state["ripped"][net] = state["ripped"].get(net, 0) + 1
+        if plan.get("reference_placement") and plan.get("reference"):
+            # BoardKit's loop: a clashing net is copied whole from the reference, locked.
+            step("route_refcopy", {"expect_file": src, "reference": plan["reference"], "nets": rip},
+                 "copy the clashing nets whole from the reference (same part positions), locked",
+                 engine="refcopy")
+            by_engine = {"inhouse": [], "freerouting": []}
         if by_engine["inhouse"]:
             step("pcb_autoroute", {"expect_file": src, "nets": by_engine["inhouse"], "diff_pairs": True},
                  "re-route with the in-house engine", engine="inhouse",

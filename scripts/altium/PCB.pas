@@ -11980,6 +11980,154 @@ Begin
         + JsonStr('file', Board.FileName)));
 End;
 
+{..............................................................................}
+{ Routed copper not in a footprint: tracks, arcs, vias. Altium Agent, from     }
+{ Brass CountRouted (Apache-2.0; see docs/PROVENANCE.md).                      }
+{..............................................................................}
+Function CountFreeCopper(Board : IPCB_Board; Kind : Integer) : Integer;
+Var
+    Iter : IPCB_BoardIterator;
+    Obj : IPCB_Primitive;
+Begin
+    Result := 0;
+    Iter := Board.BoardIterator_Create;
+    Try
+        Iter.AddFilter_ObjectSet(MkSet(Kind));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Obj := Iter.FirstPCBObject;
+        While Obj <> Nil Do
+        Begin
+            If Not Obj.InComponent Then Inc(Result);
+            Obj := Iter.NextPCBObject;
+        End;
+    Finally
+        Board.BoardIterator_Destroy(Iter);
+    End;
+End;
+
+{..............................................................................}
+{ PCB_SitusRoute - run Altium's Situs autorouter on every connection, with no  }
+{ dialog: all components selected, then Route > Auto Route > Connections On   }
+{ Selected Components ('PCB:Autoroute' Action=OnSelectedComponents), which    }
+{ uses the board's own strategy (Route > Auto Route > Setup) and leaves locked }
+{ copper alone. Situs may go on routing after this returns: poll               }
+{ PCB_RouteStatus until the counts stop changing, then save.                   }
+{ Adapted from Brass CmdPcbAutoroute (Apache-2.0): the components are          }
+{ collected first and selected after the walk (linter: no modify while         }
+{ iterating). Params: expect_file. UNVERIFIED LIVE (RELEASE_VERIFICATION A17). }
+{..............................................................................}
+Function PCB_SitusRoute(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Iter : IPCB_BoardIterator;
+    Comp : IPCB_Component;
+    Prim : IPCB_Primitive;
+    Comps : TInterfaceList;
+    Net : IPCB_Net;
+    Why, ExpectFile : String;
+    I, Tracks0, Vias0 : Integer;
+Begin
+    Board := GetPCBBoardForMutation(Why);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'AMBIGUOUS_TARGET', Why);
+        Exit;
+    End;
+    ExpectFile := ExtractJsonValue(Params, 'expect_file');
+    If (ExpectFile <> '') And (UpperCase(ExpectFile) <> UpperCase(Board.FileName)) Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'WRONG_DOCUMENT_FOCUSED',
+            'The board is ' + Board.FileName + ', not ' + ExpectFile + '. Nothing was routed.');
+        Exit;
+    End;
+    Tracks0 := CountFreeCopper(Board, eTrackObject);
+    Vias0 := CountFreeCopper(Board, eViaObject);
+
+    { Situs routes the connection lines it finds: they must match the parts now }
+    Iter := Board.BoardIterator_Create;
+    Try
+        Iter.AddFilter_ObjectSet(MkSet(eNetObject));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Net := Iter.FirstPCBObject;
+        While Net <> Nil Do
+        Begin
+            Net.ConnectivelyInValidate;
+            Net := Iter.NextPCBObject;
+        End;
+    Finally
+        Board.BoardIterator_Destroy(Iter);
+    End;
+    Board.RebuildPadCaches;
+    Board.ConnectivelyValidateNets;
+
+    Comps := CreateObject(TInterfaceList);
+    Iter := Board.BoardIterator_Create;
+    Try
+        Iter.AddFilter_ObjectSet(MkSet(eComponentObject));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Comp := Iter.FirstPCBObject;
+        While Comp <> Nil Do
+        Begin
+            Comps.Add(Comp);
+            Comp := Iter.NextPCBObject;
+        End;
+    Finally
+        Board.BoardIterator_Destroy(Iter);
+    End;
+    Board.SelectedObjects_Clear;
+    For I := 0 To Comps.Count - 1 Do
+    Begin
+        Prim := Comps.Items[I];
+        If Prim <> Nil Then Prim.Selected := True;
+    End;
+
+    ResetParameters;
+    AddStringParameter('Action', 'OnSelectedComponents');
+    RunProcess('PCB:Autoroute');
+    Board.ViewManager_FullUpdate;
+    MarkDocDirtyByPath(Board.FileName);
+
+    Result := BuildSuccessResponse(RequestId, JsonObj(
+        JsonInt('selected', Comps.Count) + ','
+        + JsonInt('tracks_before', Tracks0) + ','
+        + JsonInt('vias_before', Vias0) + ','
+        + JsonInt('tracks', CountFreeCopper(Board, eTrackObject)) + ','
+        + JsonInt('vias', CountFreeCopper(Board, eViaObject)) + ','
+        + JsonStr('file', Board.FileName) + ','
+        + JsonStr('note', 'Situs may still be routing: poll pcb.route_status until the counts stop changing, then save.')));
+End;
+
+{..............................................................................}
+{ PCB_RouteStatus - routed copper counts and whether the document is modified, }
+{ for polling a router that runs on after its command returns. Read-only.      }
+{ Adapted from Brass CmdPcbRouteStatus (Apache-2.0).                           }
+{..............................................................................}
+Function PCB_RouteStatus(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Doc : IServerDocument;
+    Modified : Boolean;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+    Modified := False;
+    Doc := Client.GetDocumentByPath(Board.FileName);
+    If Doc <> Nil Then Modified := Doc.Modified;
+    Result := BuildSuccessResponse(RequestId, JsonObj(
+        JsonInt('tracks', CountFreeCopper(Board, eTrackObject)) + ','
+        + JsonInt('arcs', CountFreeCopper(Board, eArcObject)) + ','
+        + JsonInt('vias', CountFreeCopper(Board, eViaObject)) + ','
+        + JsonBool('modified', Modified) + ','
+        + JsonStr('file', Board.FileName)));
+End;
+
 Function PCB_SetMechLayerKind(Params : String; RequestId : String) : String;
 Var
     Board : IPCB_Board;
@@ -17567,6 +17715,8 @@ Begin
         'calc_polygon_area':       Result := PCB_CalcPolygonArea(Params, RequestId);
         'set_via_soldermask_relief': Result := PCB_SetViaSoldermaskRelief(Params, RequestId);
         'set_via_tenting':         Result := PCB_SetViaTenting(Params, RequestId);
+        'situs_route':             Result := PCB_SitusRoute(Params, RequestId);
+        'route_status':            Result := PCB_RouteStatus(Params, RequestId);
         'get_mech_layer_names':    Result := PCB_GetMechLayerNames(Params, RequestId);
         'modify_polygon':          Result := PCB_ModifyPolygon(Params, RequestId);
         'get_room_rules':          Result := PCB_GetRoomRules(Params, RequestId);

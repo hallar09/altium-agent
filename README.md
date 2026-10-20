@@ -12,11 +12,13 @@ reference mode and checks of Brass and BoardKit, a routing broker, house-style
 profiles, verified writes and a self-healing bridge. Everything borrowed is
 listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-> **Status: phases (a) to (d).** The bridge, dispatcher, simulator,
+> **Status: phases (a) to (f) built; acceptance runs pending.** The bridge, dispatcher, simulator,
 > DelphiScript linter (with the Altium Agent hardening rules), doctor, tool
 > catalog and generated reference (a); the offline readers, analysis and DFM
-> (b); the Brass placer with house-style profiles (c); and the routing broker
-> with external Freerouting, clash convergence and via tenting (d) are in place, and
+> (b); the Brass placer with house-style profiles (c); the routing broker
+> with external Freerouting, Situs, reference copy, clash convergence and via
+> tenting (d); gate reviews, stage undo and design_status (e); the skills,
+> runbook and gap list (f) are in place, and
 > the offline test suite passes. **Nothing has been verified against a live Altium by Altium Agent
 > yet**: every bridge tool is badged `simulator` or `live_unverified`, never
 > `live_verified`, until the release run in
@@ -153,6 +155,15 @@ the `audit_` tools for pins, decoupling and nets, `pcb_layout_audit` for
 geometry, and `analyze_drc_report` on Altium's DRC report, which separates
 copper problems from silk/mask noise and flags a report cut off at 500.
 
+**Look, then claim.** At each gate (schematic, placement, routing,
+verification) `design_gate_review` renders the saved design to PNG with the
+findings numbered on it and the ratsnest dashed, measures the gate's numbers
+and returns a rubric to answer from the pictures. `design_status` gives the
+stage, ERC, unrouted, DRC, DFM, style departures, open issues and the next
+action in one call. Start a session with `design_session_start(project=...)`
+and every `stage_enter` takes a checkpoint; `design_undo_to_stage` goes back to
+any of them in one call.
+
 ## When Altium does not answer
 
 Call `app_diagnose` (or run `altium-agent doctor`). It returns findings with the
@@ -272,6 +283,9 @@ test keeps current.
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): layout of the code and the phase plan
+- [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md): the four live acceptance runs, step by step
+- [docs/GAPS.md](docs/GAPS.md): what altium-mcp, Brass, BoardKit and eda-agent still do that Altium Agent does not
+- [skills/](skills/README.md): the `autodesign`, `relayout` and `review` skills
 - [docs/TOOL_NAMING.md](docs/TOOL_NAMING.md): groups, verbs, units, badges
 - [docs/TOOL_REFERENCE.md](docs/TOOL_REFERENCE.md): every tool (generated)
 - [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md): what Altium does to scripts, and how each is handled

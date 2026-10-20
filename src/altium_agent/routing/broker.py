@@ -14,10 +14,12 @@ A board is routed the way a designer routes it, not in one autorouter run:
 4. Repour, DRC, then ``route_converge`` until the clashes are gone or only
    ones that need a person remain.
 
-Altium's own routers are offered, never driven: Situs (Route > Auto Route)
-has no scripting interface that does not stop at its dialog, and the
-interactive router is interactive. The plan names when they are the better
-tool (a few nets left over, length tuning) and what to do in Altium.
+Altium's Situs finishes: after the bulk, ``route_situs`` routes the
+connections still open (Connections On Selected Components with every part
+selected, which needs no dialog, as Brass does it; locked copper is left
+alone). Situs is a finisher, not a first pass: on a dense board it gives up
+once its first pass has boxed pins in (BoardKit's lesson). The interactive
+router stays a person's tool (length tuning, the last awkward connection).
 
 Copper already on the board is protected: a fully routed net is left alone,
 and a partly routed one keeps its copper (Freerouting gets it as fixed
@@ -149,7 +151,8 @@ def _batches(nets: list[str], size: int) -> list[list[str]]:
 
 
 def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_ready: bool = False,
-         batch_size: int = 0, profile: dict | None = None, max_passes: int = 50) -> dict:
+         batch_size: int = 0, profile: dict | None = None, max_passes: int = 50,
+         reference: PcbDocument | None = None) -> dict:
     """The broker's plan: steps, each an exact tool call with its reason."""
     engines = [e for e in (engines or list(ENGINES)) if e in ENGINES]
     use_fr = "freerouting" in engines and freerouting_ready
@@ -170,6 +173,23 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
                 "unrouted_connections": c["unrouted_connections"], "routed_by_plan": [], "steps": [],
                 "notes": ["Nothing to route: every connection is made (by tracks, pours or fills)."],
                 "counts": {k: len(v) for k, v in t.items()}}
+    ref_place = False
+    escape_part = None
+    if reference is not None:
+        from .refcopy import moved_parts
+
+        ref_place = not moved_parts(reference, doc, {c.designator for c in doc.components})
+        if ref_place:
+            pins: dict[str, int] = defaultdict(int)
+            for p in doc.pads:
+                if p.component != NONE16:
+                    pins[doc.designator(p.component)] += 1
+            big = max(pins.items(), key=lambda kv: kv[1], default=(None, 0))
+            escape_part = big[0] if big[1] >= 48 else None
+            notes.append(f"Reference placement: every part is where {reference.path.name} has it, so "
+                         "clashing nets are copied from the reference in route_converge (BoardKit's refcopy).")
+        else:
+            notes.append(f"The parts have moved from {reference.path.name}: reference copper cannot be copied.")
     step("app_checkpoint", {"label": "before routing", "save_first": True},
          "a restore point before any copper is written")
     protected = c["protected"]["routed"] + c["protected"]["partial"]
@@ -177,6 +197,10 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
         step("pcb_lock_net_routing", {"nets": protected, "lock": True},
              f"{len(protected)} net(s) already carry routing: lock it so no engine moves it",
              engine="altium")
+    if escape_part:
+        step("route_refcopy", {"expect_file": src, "reference": str(reference.path), "escape": escape_part},
+             f"{escape_part}'s escape routing copied from the reference and locked first: the big part "
+             "is where autorouters box themselves in", engine="refcopy", tier="escape")
     if t["pair"]:
         step("pcb_autoroute", {"expect_file": src, "nets": t["pair"], "diff_pairs": True},
              f"{len(c['pairs'])} differential pair(s) first, coupled", engine="inhouse", tier="pair",
@@ -204,6 +228,10 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
     if t["poured"]:
         notes.append(f"{len(t['poured'])} net(s) are carried by pours and left to them: "
                      + ", ".join(t["poured"][:12]) + ("..." if len(t["poured"]) > 12 else ""))
+    if "altium" in engines:
+        step("route_situs", {"expect_file": src},
+             "Situs finishes the connections still open (locked copper stays); skip it when "
+             "nothing is left unrouted", engine="situs", tier="finish")
     step("pcb_repour_polygons", {}, "pours are rebuilt round the new copper and join their nets")
     step("pcb_run_drc", {"answer_dialogs": True}, "Altium's own rules judge the result")
     step("route_converge", {"plan": "<this plan's path>", "drc": "<the pcb_run_drc result or report>"},
@@ -214,13 +242,13 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
         step("ref_compare", {"profile": profile.get("name"), "pcb": src},
              "the routed board compared with the reference")
     if "altium" in engines:
-        notes.append("Situs (Route > Auto Route > Net/Connection) and the interactive router are not "
-                     "driven by the broker (Situs stops at its dialog; the interactive router is "
-                     "interactive). Use them for the last few connections or for length tuning, then "
-                     "save; route_converge reads what they did from the saved file.")
+        notes.append("The interactive router is not driven: use it for length tuning or a last awkward "
+                     "connection, then save; route_converge reads what it did from the saved file.")
     if protected:
         notes.append("Locked routing is unlocked again only by you (pcb_lock_net_routing lock=false).")
     return {"plan_version": PLAN_VERSION, "source": src, "origin_mil": list(doc.origin_mil),
+            "reference": str(reference.path) if reference is not None else None,
+            "reference_placement": ref_place,
             "engines": engines, "freerouting": use_fr, "tiers": {k: v for k, v in t.items()},
             "pairs": [{"name": n, "positive": p, "negative": q} for n, p, q in c["pairs"]],
             "protected": c["protected"], "unrouted_connections": c["unrouted_connections"],

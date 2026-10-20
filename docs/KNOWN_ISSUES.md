@@ -43,6 +43,23 @@ board. Items marked **open** are not handled yet.
 |---|---|
 | A net named `-5V` or `-VBAT` given as `--nets -5V` is read as an option. | The CLI joins list options as `--nets=-5V` and splits names itself (`core/cli_args.py`, `tests/test_net_names_with_a_leading_dash.py`). |
 
+## Renders, checkpoints and status (phase e)
+
+- **Offline renders draw symbols as boxes** with their pins (the sheet files
+  carry no symbol art the reader keeps), and leave poured polygons out so the
+  tracks under them show. Live renders (`pcb_render_svg`, `design_visual_review`)
+  draw what Altium sends.
+- **Reviews, checkpoints and status read the saved files.** Unsaved edits in
+  Altium are in none of them: save before a gate, a stage entry or a status call.
+- **PNG needs a Chromium-family browser** (Edge on Windows, or
+  `ALTIUM_AGENT_BROWSER`); without one the SVG is still written.
+- **DRC report coordinates are absolute**; the gate review subtracts the board
+  origin to mark them. A report older than the board is flagged `stale`.
+- **`design_undo_to_stage` closes the project in Altium without saving**, then
+  restores and reopens it. If Altium asks a save question it cannot answer,
+  run `proj_close(save=false)` and call again with `altium_closed=true`. A
+  safety checkpoint is taken first, so the undo can be undone. Live-unverified (A16).
+
 ## Placement (phase c)
 
 - **Footprint boxes include silkscreen and courtyards.** On dense boards these
@@ -71,7 +88,9 @@ board. Items marked **open** are not handled yet.
 | Freerouting 2.5's native CLI crashes (`UnsupportedFeatureError` for `ObstacleArea`) on boards with keep-outs. | The jar is preferred when both are installed. |
 | Freerouting sends usage analytics by default. | Every run passes `--usage_and_diagnostic_data.disable_analytics=true`. |
 | Fan-out vias ignore parts on the other side and pair corridors. | Batches run with Freerouting's fan-out off and pairs already routed. **Open** for a whole-board run. |
-| Situs gives up after its first pass has boxed pins in. | The broker does not drive Situs (its dialog stops a script); it is offered for the last few connections, by hand. |
+| Situs gives up after its first pass has boxed pins in. | Situs is the broker's finisher, not its first pass: `route_situs` (every part selected, Connections On Selected Components: no dialog, the board's own strategy, locked copper untouched) after the bulk, polled until the copper stops changing. Live-unverified (A17). |
+| A reference-placed re-layout stalls in the autorouters (Kame_FMU_v2: Situs 79%, Freerouting worse each pass). | `route_refcopy` copies the big part's escape and any clashing net whole from the reference, locked, when every part is where the reference has it; `route_converge` does it per round with a reference plan. Arcs are copied as short segments. Live-unverified (A18). |
+| Pours left in place box the autorouter in (Situs 54% vs 74%+ shelved on Kame). | **Open**: no shelve/restore tool yet (docs/GAPS.md). Freerouting takes pours as planes and does not need it. |
 | Diff pairs must be routed as pairs first. | First step of every plan (in-house engine, `diff_pairs`). |
 | A re-layout must not silently remove hand routing. | Routed nets are locked first (`pcb_lock_net_routing`), exported as fixed wiring, never ripped by `route_converge` (only `include_locked=false` unroutes of the plan's own nets), and SES copper that matches existing copper is not written twice. |
 | Via tenting. | `pcb.set_via_tenting` sets manual mask mode, then tenting, and reads it back; `route_set_via_tenting` also confirms it from the saved file (tent flags 0x20/0x40 of the via record). **Live-unverified** (A15): the mask-mode write is the kind of via write that once crashed AD26's scripting engine. |

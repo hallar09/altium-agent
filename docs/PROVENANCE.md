@@ -56,7 +56,12 @@ Changed:
 `diag/self_heal.py`, `diag/verify.py`, `analysis/drc_report.py`,
 `core/units_policy.py`, `core/cli_args.py`, `tools/agent.py`,
 `scripts/altium/lint_hardening.py`, `core/LEGACY_UNIT_TOOLS.json`,
-`routing/broker.py`, `routing/converge.py`, `routing/via_style.py`,
+`routing/refcopy.py` (a new implementation of BoardKit's `refcopy` rules, no
+BoardKit code), `docs/ACCEPTANCE.md`, `docs/GAPS.md`, the three skills,
+`design/gate_review.py`, `design/stage_checkpoints.py`, `design/status.py`,
+`render/file_geometry.py`, `tools/design_gates.py`, the review overlay in
+`render/pcb_svg.py` and `render/sch_svg.py`, the rewind event in
+`design/session.py`, `routing/broker.py`, `routing/converge.py`, `routing/via_style.py`,
 `routing/service.py`, `tools/routing_broker.py`, `PCB_SetViaTenting` in
 `scripts/altium/PCB.pas`, the via tent flags in `offline/files/pcbdoc.py`,
 `tools/live_verified.json`, and their tests. They carry the Apache-2.0 SPDX
@@ -122,6 +127,12 @@ NOTICE.
 | `placement/shape.py` | `src/board/shape.ts` | port; `outline_from_points` keeps an existing outline and its offset |
 | `placement/antenna.py` | `src/board/antenna.ts` | port |
 | `placement/placer.py` | `src/board/placer.ts` (with `src/geometry.ts`) | port with the same seeded PRNG (mulberry32), so a seed means the same thing; net length and the outline mask vectorised with numpy; levers take `_mm` names; new `body` lever (space by copper) and `decap_weight`; placements returned in the board's own frame |
+
+`scripts/altium/PCB.pas` `PCB_SitusRoute`, `PCB_RouteStatus` and
+`CountFreeCopper` are adapted from Brass's `CmdPcbAutoroute`,
+`CmdPcbRouteStatus` and `CountRouted` (`BrassBridge.pas`, Apache-2.0): the
+selection is collected first and set after the walk, and the handlers follow
+Altium Agent's dispatcher conventions.
 
 Written for Altium Agent, not from Brass: `placement/check.py`,
 `placement/service.py`, `reference/profile.py`, `reference/compare.py`,

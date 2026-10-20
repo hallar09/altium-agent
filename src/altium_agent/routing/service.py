@@ -39,22 +39,59 @@ def engines_status() -> dict:
                         {"available": False, "searched": [str(d) for d in fr.search_dirs()],
                          "hint": "Freerouting is GPL-3.0 and is not shipped; install it yourself and set "
                                  "ALTIUM_AGENT_FREEROUTING (a jar, with ALTIUM_AGENT_JAVA, or a native build)."}),
-        "altium": {"available": "manual", "how": "Situs (Route > Auto Route) and the interactive router are "
-                                                 "used by you in Altium; the broker reads the saved result"},
+        "altium": {"available": True,
+                   "how": "Situs via route_situs (no dialog; the board's own strategy) as the finisher; the "
+                          "interactive router is used by you in Altium, and the broker reads the saved result"},
     }
+
+
+POLICY_FILE = "altium_agent.json"
+
+
+def project_policy(folder: Path) -> dict:
+    """The project's own settings: ``altium_agent.json`` beside the .PrjPcb.
+
+    ``{"routing": {"third_party_engines": false}}`` keeps third-party routing
+    engines (Freerouting) out of this project; absent, they are allowed when
+    installed. The file is the user's; Altium Agent only reads it.
+    """
+    p = Path(folder) / POLICY_FILE
+    if not p.is_file():
+        return {"source": None, "third_party_engines": True}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise InvalidArgument(f"{p} is not valid JSON: {exc}") from exc
+    r = data.get("routing") or {}
+    return {"source": str(p), "third_party_engines": bool(r.get("third_party_engines", True))}
 
 
 def route_broker_plan(project: str | None = None, pcb: str | None = None, profile: Any = None,
                       engines: list[str] | None = None, batch_size: int = 0, max_passes: int = 50,
-                      name: str | None = None) -> dict:
+                      name: str | None = None, reference: str | None = None) -> dict:
     bad = [e for e in (engines or []) if e not in ENGINES]
     if bad:
         raise InvalidArgument(f"unknown engine(s) {bad}; known: {list(ENGINES)}")
     b = load_board(project, pcb)
     prof = load_profile(profile) if profile is not None else None
+    policy = project_policy((b.project or b.doc.path).parent)
+    engines = list(engines or ENGINES)
+    if not policy["third_party_engines"] and "freerouting" in engines:
+        engines.remove("freerouting")
+    ref_doc = None
+    ref_path = reference or (prof.get("source") if prof else None)
+    if ref_path and Path(ref_path).suffix.lower() == ".pcbdoc" and Path(ref_path).is_file():
+        ref_doc = read_pcbdoc(Path(ref_path))
+    elif reference:
+        ref_doc = load_board(reference if reference.lower().endswith(".prjpcb") else None,
+                             None if reference.lower().endswith(".prjpcb") else reference).doc
     f = fr.find()
     p = broker_plan(b.doc, engines=engines, freerouting_ready=bool(f and f.usable), batch_size=batch_size,
-                    profile=prof, max_passes=max_passes)
+                    profile=prof, max_passes=max_passes, reference=ref_doc)
+    p["policy"] = policy
+    if not policy["third_party_engines"]:
+        p["notes"].insert(0, f"The project's policy ({policy['source']}) forbids third-party engines: "
+                             "no Freerouting.")
     p["created"] = _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
     p["project"] = str(b.project) if b.project else None
     if is_protected_design(p["source"]):

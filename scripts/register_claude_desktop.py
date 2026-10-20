@@ -49,7 +49,7 @@ def main() -> int:
         side = cfg.with_name("altium-mcp-servers-turned-off.json")
         side.write_text(json.dumps(shelved, indent=2), encoding="utf-8")
         print(f"Turned off {', '.join(shelved)} (saved in {side} to put back later)")
-    servers["AltiumAgent"] = {"command": str(exe), "args": []}
+    servers["AltiumAgent"] = {"command": str(exe), "args": ["--toolset", "core"]}
     cfg.write_text(json.dumps(data, indent=2), encoding="utf-8")
     print(f"Registered AltiumAgent in {cfg}")
     print("Now open the Claude desktop app again (quit it fully first if it is still running).")

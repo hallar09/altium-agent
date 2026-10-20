@@ -72,11 +72,25 @@ def test_register_exposes_expected_tools() -> None:
 
 def test_get_discipline_returns_text_and_schema() -> None:
     tools = _registered_tools()
-    result = asyncio.run(tools["design_get_discipline"]())
+    result = asyncio.run(tools["design_get_discipline"](section="all"))
     assert "discipline" in result
     assert "schema" in result
     assert "Design Discipline" in result["discipline"]
     assert "DesignPlan" in result["schema"]["title"]
+
+
+def test_get_discipline_default_is_small() -> None:
+    """The default reply is the hard rules and an index, not all 75k chars."""
+    tools = _registered_tools()
+    result = asyncio.run(tools["design_get_discipline"]())
+    assert "Hard rules" in result["discipline"]
+    assert "schema" not in result
+    assert len(result["discipline"]) < 20000
+    titles = [s["section"] for s in result["sections"]]
+    assert "DesignPlan JSON schema" in titles
+    one = asyncio.run(tools["design_get_discipline"](section="routing"))
+    assert "routing discipline" in one["discipline"]
+    assert "schema" in asyncio.run(tools["design_get_discipline"](section="schema"))
 
 
 def test_validate_plan_accepts_valid_plan() -> None:

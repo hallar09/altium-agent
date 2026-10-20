@@ -58,7 +58,10 @@ DEFAULT_BACKEND = "altium"
 # cap tool count or stall serializing hundreds of schemas at startup.
 # See altium_agent.tools.registry for why this beats merging tools into
 # generic dispatchers.
-TOOLSETS = ("full", "minimal")
+# "core" advertises the ~100 tools a design run uses (registry.CORE_TOOLS)
+# and reaches the rest through tool_catalog / tool_invoke: a fraction of
+# the context, for clients that load every schema on every turn.
+TOOLSETS = ("full", "core", "minimal")
 DEFAULT_TOOLSET = "full"
 
 #: Design tools that compute over a plan and never touch a bridge.
@@ -152,7 +155,25 @@ def register_backend(
         toolset = DEFAULT_TOOLSET
     if toolset == "minimal":
         return _register_minimal(mcp, backend)
+    if toolset == "core":
+        return _register_core(mcp, backend)
     return _register_full(mcp, backend)
+
+
+def _register_core(mcp, backend: str) -> str:
+    """Capture the whole surface, advertise CORE_TOOLS (the rest via invoke)."""
+    from .registry import CORE_TOOLS, MINIMAL_TOOLS, ToolRegistry
+
+    registry = ToolRegistry()
+    name = _register_full(registry, backend)
+    missing = [t for t in MINIMAL_TOOLS if t not in registry]
+    if missing:
+        raise RuntimeError(
+            f"core toolset needs {missing}, which the backend did not register")
+    for tool_name in CORE_TOOLS:
+        if tool_name in registry:
+            mcp.tool()(registry.get(tool_name).fn)
+    return name
 
 
 def _register_minimal(mcp, backend: str) -> str:

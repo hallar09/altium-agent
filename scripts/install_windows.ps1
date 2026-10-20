@@ -61,13 +61,13 @@ if (Test-Path $Cfg) {
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1])
 data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
-data.setdefault('mcpServers', {})['AltiumAgent'] = {'type': 'stdio', 'command': sys.argv[2], 'args': [], 'env': {}}
+data.setdefault('mcpServers', {})['AltiumAgent'] = {'type': 'stdio', 'command': sys.argv[2], 'args': ['--toolset', 'core'], 'env': {}}
 p.write_text(json.dumps(data, indent=2), encoding='utf-8')
 print('Registered AltiumAgent in', p)
 "@ $Cfg $Exe
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "Registering in $Cfg failed. The Altium scripts are installed; register by hand with:"
-    Write-Warning "  claude mcp add --scope user AltiumAgent -- `"$Exe`""
+    Write-Warning "  claude mcp add --scope user AltiumAgent -- `"$Exe`" --toolset core"
 }
 
 Write-Host ""

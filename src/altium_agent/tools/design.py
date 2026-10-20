@@ -120,26 +120,67 @@ def _divider_payload(r, series: str, mode: str) -> dict[str, Any]:
     }
 
 
+def _discipline_sections() -> list[tuple[str, str]]:
+    """The discipline split at its level-2 headings: (title, text)."""
+    import re as _re
+    text = get_discipline()
+    marks = [m.start() for m in _re.finditer(r"(?m)^## ", text)]
+    head = text[:marks[0]] if marks else text
+    parts = [("", head)]
+    for i, start in enumerate(marks):
+        end = marks[i + 1] if i + 1 < len(marks) else len(text)
+        chunk = text[start:end]
+        parts.append((chunk.splitlines()[0][3:].strip(), chunk))
+    return parts
+
+
+def _discipline_part(section: str) -> dict[str, Any]:
+    parts = _discipline_sections()
+    index = [{"section": t, "chars": len(c)} for t, c in parts if t]
+    want = (section or "").strip().lower()
+    if want == "all":
+        return {"discipline": get_discipline(), "sections": index,
+                "schema": DesignPlan.model_json_schema()}
+    if want == "schema":
+        return {"discipline": "", "sections": index,
+                "schema": DesignPlan.model_json_schema()}
+    if not want:
+        want = "hard rules"
+    picked = [(t, c) for t, c in parts if t and want in t.lower()]
+    if not picked:
+        return {"ok": False, "error": "unknown_section",
+                "message": f"no section matches {section!r}",
+                "sections": index}
+    body = parts[0][1] + "".join(c for _, c in picked)
+    return {
+        "discipline": body,
+        "sections": index,
+        "note": ("Other sections: call design_get_discipline(section=<a "
+                 "word of its title>), or section='schema' for the "
+                 "DesignPlan JSON schema."),
+    }
+
+
 def register_design_tools(mcp) -> None:
     """Register the design-agent tools with the MCP server."""
 
     @mcp.tool()
-    async def design_get_discipline() -> dict[str, Any]:
-        """Read the design discipline + DesignPlan JSON schema.
+    async def design_get_discipline(section: str = "") -> dict[str, Any]:
+        """Read the design discipline, one section at a time.
 
-        ALWAYS call this first when starting a design task. The result
-        contains the hard rules the planner must follow (net-label-driven
-        wiring, datasheet-first part choice, NDA isolation, etc.) plus
-        the JSON schema that ``design_execute_plan`` enforces on input.
+        Call it first when starting a design task. With no ``section`` it
+        returns the hard rules and an index of the other sections; fetch
+        the others when the stage needs them ("tool-usage", "workflow",
+        "placement", "routing", "board layout", "schema" for the
+        DesignPlan JSON schema, or "all" for everything, about 75k
+        characters). Sections cost context on every later turn, so read
+        only what the current stage needs.
 
         Returns:
-            A dict with ``discipline`` (markdown text) and
-            ``schema`` (DesignPlan JSON schema as a dict).
+            ``discipline`` (markdown), ``sections`` (the index), and
+            ``schema`` when asked for "schema" or "all".
         """
-        return {
-            "discipline": get_discipline(),
-            "schema": DesignPlan.model_json_schema(),
-        }
+        return _discipline_part(section)
 
     # --- session journal (autonomy-harness durable state) ----------------
 

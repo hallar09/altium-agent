@@ -69,6 +69,16 @@ listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
   placer, layout engine, library and part-sourcing tools, SPICE, audits,
   checkpoints, OutJobs, dashboard and live view, all carried over.
 
+
+### Keeping usage down
+
+All tools together are about 150k tokens of schemas. Register the server
+with `--toolset core` (the install scripts do) to advertise the ~95 tools
+a design run uses; everything else stays reachable through `tool_catalog`
+and `tool_invoke`. `design_get_discipline` returns one section at a time.
+Long design chats grow expensive: the session journal survives a new
+chat, so start one per stage with `design_session_resume`.
+
 ## Install (Windows)
 
 Altium Designer (AD26 is the target) must be installed; Altium Agent never

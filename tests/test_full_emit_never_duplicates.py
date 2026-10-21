@@ -80,3 +80,22 @@ def test_failed_clear_draws_nothing(tmp_path):
     assert not r.ok
     assert any(f.code == "CLEAR_FAILED" for f in r.failures)
     assert not any("place" in c for c, _ in b.sent if c != "generic.delete_objects")
+
+
+def test_execute_plan_refuses_a_project_that_does_not_exist(tmp_path):
+    """A mistyped project path must not make a second project and sheet."""
+    import asyncio
+    import json as _json
+
+    from mcp.server.fastmcp import FastMCP
+
+    from altium_agent.tools.design import register_design_tools
+
+    m = FastMCP("t")
+    register_design_tools(m)
+    missing = tmp_path / "nowhere" / "MacroStick.PrjPcb"
+    out = asyncio.run(m.call_tool("design_execute_plan", {
+        "plan_json": _json.dumps({"name": "x"}), "project_path": str(missing)}))
+    text = _json.dumps([getattr(c, "text", str(c)) for c in (out[0] if isinstance(out, tuple) else out)])
+    assert "does not exist" in text
+    assert not missing.parent.exists()

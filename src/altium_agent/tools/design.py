@@ -161,6 +161,34 @@ def _discipline_part(section: str) -> dict[str, Any]:
     }
 
 
+def _refuse_missing_project(plan_json: Any, project_path: str,
+                            create_project: bool) -> Optional[dict[str, Any]]:
+    """Refuse to draw into a project that does not exist, unless asked to.
+
+    Found in the MacroStick acceptance run: a run given a path one folder
+    too high got a second MacroStick__main.SchDoc there, Altium merged the
+    two same-named sheets and ERC reported 514 errors. Bad JSON is left to
+    the executor, which reports it.
+    """
+    if create_project or not project_path:
+        return None
+    if isinstance(plan_json, str):
+        try:
+            json.loads(plan_json)
+        except ValueError:
+            return None
+    if Path(project_path).exists():
+        return None
+    return {
+        "ok": False,
+        "project_path": project_path,
+        "notes": [
+            f"{project_path} does not exist, so nothing was drawn. Check "
+            f"the path (design_status shows the session's project), or "
+            f"create it with proj_create, or pass create_project=True."],
+    }
+
+
 def register_design_tools(mcp) -> None:
     """Register the design-agent tools with the MCP server."""
 
@@ -2302,6 +2330,7 @@ def register_design_tools(mcp) -> None:
         use_canvas: bool = True,
         placement_hints: Optional[dict[str, dict[str, int]]] = None,
         mode: str = "auto",
+        create_project: bool = False,
     ) -> dict[str, Any]:
         """Draw a DesignPlan in Altium: places AND routes the sheet in one
         call, and writes an SVG preview next to the project. Stops first if
@@ -2310,7 +2339,11 @@ def register_design_tools(mcp) -> None:
 
         Args:
             plan_json: The DesignPlan as JSON text or a dict.
-            project_path: Target .PrjPcb (created if missing).
+            project_path: Target .PrjPcb. It must exist (proj_create it
+                first) unless ``create_project`` is True: a mistyped path
+                otherwise makes a second project and sheet elsewhere.
+            create_project: Create the project when ``project_path`` does
+                not exist (default False).
             use_canvas: True (default) lays out in Python then emits once;
                 False uses the legacy executor.
             placement_hints: {refdes: {"x", "y", "rotation"}} to pin parts;
@@ -2329,6 +2362,10 @@ def register_design_tools(mcp) -> None:
             edit, ``delta`` lists refdes added, moved, replaced, removed
             and untouched.
         """
+        refused = _refuse_missing_project(plan_json, project_path,
+                                          create_project)
+        if refused:
+            return refused
         if use_canvas:
             return execute_plan_via_canvas_from_json(
                 plan_json, project_path,

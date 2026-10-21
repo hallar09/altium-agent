@@ -240,7 +240,8 @@ async def _name_the_document_when_nothing_matched(bridge, scope, result) -> None
     """
     if scope != "active_doc" or not isinstance(result, dict):
         return
-    if result.get("matched") not in (0, "0"):
+    n = result.get("matched", result.get("count"))
+    if n not in (0, "0"):
         return
     try:
         doc = await bridge.send_command_async("application.get_active_document")
@@ -338,6 +339,7 @@ def register_generic_tools(mcp):
         # Pin location is the body root, not the connection point, and
         # that keeps being rediscovered by getting it wrong. Say it on
         # the reply the caller is already reading.
+        await _name_the_document_when_nothing_matched(bridge, scope, result)
         hint = pin_location_hint(object_type, properties)
         if hint and isinstance(result, dict):
             result["_hint_pin_connection"] = hint
@@ -1677,6 +1679,7 @@ def register_generic_tools(mcp):
         # count. This tool only promises the count -- drop the wasteful array.
         if isinstance(result, dict):
             result.pop("objects", None)
+        await _name_the_document_when_nothing_matched(bridge, scope, result)
         return result
 
     @mcp.tool()

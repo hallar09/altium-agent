@@ -20,6 +20,31 @@ from .common import ProjectArg, model_for
 from .registry import tool
 
 
+def _default_roots() -> list[Path]:
+    """Where to look when no root is given: the user's Documents, the
+    configured project's folder, and Altium's public examples (read only).
+
+    The ported tool read ``Settings.roots``, which this project's settings
+    never had, so every call without ``root`` raised AttributeError.
+    """
+    import os
+    out: list[Path] = []
+    project = get_settings().project
+    if project:
+        out.append(project.parent)
+    home = os.environ.get("USERPROFILE")
+    base = Path(home) if home else Path.home()
+    out.append(base / "Documents")
+    public = os.environ.get("PUBLIC")
+    if public:
+        out.append(Path(public) / "Documents" / "Altium")
+    seen: list[Path] = []
+    for r in out:
+        if r.exists() and r not in seen:
+            seen.append(r)
+    return seen
+
+
 @tool(ToolClass.READ, "project", "Find Altium projects")
 def project_find(
     root: Annotated[str | None, Field(description="Folder to search. Defaults to all allowed roots.")] = None,
@@ -27,7 +52,7 @@ def project_find(
     max_results: Annotated[int, Field(ge=1, le=500)] = 50,
 ) -> dict:
     """List .PrjPcb projects under the allowed roots (newest first). Start here when no project is configured."""
-    roots = [safe_path(root)] if root else list(get_settings().roots)
+    roots = [safe_path(root)] if root else _default_roots()
     found = find_projects(roots, max_results=max_results * 4)
     if name_contains:
         found = [p for p in found if name_contains.lower() in p["name"].lower()]

@@ -81,8 +81,8 @@ web = [
 altium-agent = "altium_agent.server:main"
 
 [project.urls]
-Homepage = "docs/PROVENANCE.md"
-Repository = "docs/PROVENANCE.md"
+Homepage = "https://github.com/hallar09/altium-agent"
+Repository = "https://github.com/hallar09/altium-agent"
 Issues = "docs/KNOWN_ISSUES.md"
 
 [tool.hatch.build.targets.wheel]

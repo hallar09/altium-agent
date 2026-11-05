@@ -125,14 +125,16 @@ def test_unknown_toolset_falls_back_to_the_default_not_empty():
     """A typo in the env must never leave the server with no tools."""
     registry = ToolRegistry()
     register_backend(registry, "altium", "nonsense-value")
-    assert set(registry.names) == set(CORE_TOOLS)
+    full = ToolRegistry()
+    register_backend(full, "altium", "full")
+    assert set(registry.names) == set(full.names) > set(CORE_TOOLS)
 
 
-def test_default_toolset_is_core():
-    """The full surface is ~150k tokens of schemas; a client that loads
-    them all pays that every turn. Core keeps the rest one tool_invoke
-    away, and "full" is still there to ask for."""
-    assert DEFAULT_TOOLSET == "core"
+def test_default_toolset_is_full():
+    """Every tool is advertised by default: agents missed tools that were
+    only one tool_invoke away (pcb_apply_geometry_map). "core" is still
+    there for clients that pay for every schema on every turn."""
+    assert DEFAULT_TOOLSET == "full"
 
 
 @pytest.mark.anyio

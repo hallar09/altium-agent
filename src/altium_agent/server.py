@@ -112,8 +112,9 @@ ACTIVE_BACKEND = os.environ.get("ALTIUM_AGENT_BACKEND", DEFAULT_BACKEND)
 # Some MCP clients cap tool count or stall serializing hundreds of schemas
 # at startup. ALTIUM_AGENT_TOOLSET=minimal advertises only tool_catalog and
 # tool_invoke while keeping every other tool reachable through them. The
-# default is "core": the ~95 tools a design run uses, the rest one
-# tool_invoke away. "full" advertises all of them (~150k tokens of schemas).
+# default is "full": every tool advertised, so nothing has to be found
+# through tool_invoke. "core" advertises the ~100 tools a design run uses,
+# the rest one tool_invoke away, for clients that pay for every schema.
 ACTIVE_TOOLSET = os.environ.get("ALTIUM_AGENT_TOOLSET", DEFAULT_TOOLSET)
 
 # WHY THERE ARE SERVER INSTRUCTIONS AT ALL.

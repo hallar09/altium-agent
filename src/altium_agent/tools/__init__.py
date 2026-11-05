@@ -63,7 +63,7 @@ DEFAULT_BACKEND = "altium"
 # and reaches the rest through tool_catalog / tool_invoke: a fraction of
 # the context, for clients that load every schema on every turn.
 TOOLSETS = ("full", "core", "minimal")
-DEFAULT_TOOLSET = "core"
+DEFAULT_TOOLSET = "full"
 
 #: Design tools that compute over a plan and never touch a bridge.
 #:
@@ -146,8 +146,8 @@ def register_backend(
     stray value in the environment can never leave the server toolless.
 
     Args:
-        toolset: "core" (the default) advertises registry.CORE_TOOLS.
-            "full" advertises every tool. "minimal" advertises only
+        toolset: "full" (the default) advertises every tool. "core"
+            advertises registry.CORE_TOOLS. "minimal" advertises only
             tool_catalog and tool_invoke while keeping all the others
             reachable through them, for clients that cannot cope with a
             few hundred tools.

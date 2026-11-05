@@ -31,9 +31,9 @@ Skill: `relayout`. Reference: `%PUBLIC%\Documents\Altium\Sample - Kame_FMU`
    `pcb_unroute(expect_file, include_locked=false)` on the copy. Set
    `pcb_polygon_repour_mode("never")` for the routing pass. **Gap**: shelving
    the pours (BoardKit: Situs reached 54% with them in place, 74%+ shelved) has
-   no tool yet; Freerouting does not need it (pours go to the DSN as planes),
-   Situs does, so until it exists either shelve them by hand (Tools > Polygon
-   Pours > Shelve) and say so in the log, or let Freerouting do the bulk.
+   no tool yet; a routing session does not need it (it routes before the
+   pours are poured), Situs does, so for a Situs pass shelve them by hand
+   (Tools > Polygon Pours > Shelve) and say so in the log.
 4. `route_broker_plan(project=<copy>, profile="Kame_FMU", reference=<sample .PcbDoc>)`:
    expect `reference_placement: true` and a first step copying U12's escape.
    Follow the steps; `route_converge` copies clashing nets from the reference.

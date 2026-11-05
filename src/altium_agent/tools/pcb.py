@@ -419,6 +419,62 @@ def scope_problem(expr: str) -> tuple[str, str]:
         f"||, which bind after comparisons. Nothing was sent."), fixed
 
 
+#: The exact (mm) values each pcb_create_design_rule kind accepts.
+_RULE_MM_KEYS: dict[str, tuple[str, ...]] = {
+    "clearance": ("gap",),
+    "width": ("min_width", "max_width", "pref_width"),
+    "via_size": ("min_hole", "max_hole"),
+    "differential_pairs": ("min_width", "max_width", "pref_width", "min_gap", "max_gap",
+                           "pref_gap", "max_uncoupled"),
+    "solder_mask_expansion": ("expansion",),
+    "paste_mask_expansion": ("expansion",),
+    "vias_under_smd": (),
+    "routing_via": ("via_min", "via_max", "via_pref", "hole_min", "hole_max", "hole_pref"),
+    "polygon_connect": ("conductor", "air_gap"),
+    "plane_connect": ("conductor", "air_gap", "expansion"),
+    "plane_clearance": ("clearance",),
+    "annular_ring": ("min",),
+    "solder_mask_sliver": ("gap",),
+}
+
+
+def _rule_mm_problem(rule_type: str, values_mm: Optional[dict], style: str = "") -> str:
+    """Why a pcb_create_design_rule call cannot be sent, or '' when it can."""
+    allowed = _RULE_MM_KEYS.get(rule_type)
+    if allowed is None:
+        return f"unknown rule_type {rule_type!r}; use one of {sorted(_RULE_MM_KEYS)}"
+    if values_mm:
+        bad = sorted(set(values_mm) - set(allowed))
+        if bad:
+            return (f"values_mm keys {bad} do not apply to {rule_type}; it takes "
+                    f"{sorted(allowed) or 'none'}")
+        not_num = sorted(k for k, v in values_mm.items()
+                         if not isinstance(v, (int, float)) or isinstance(v, bool))
+        if not_num:
+            return f"values_mm {not_num} must be numbers in mm"
+        if rule_type not in ("solder_mask_expansion", "paste_mask_expansion"):
+            neg = sorted(k for k, v in values_mm.items() if v < 0)
+            if neg:
+                return f"values_mm {neg} must not be negative"
+        lo_hi = (("min_width", "max_width"), ("min_gap", "max_gap"), ("via_min", "via_max"),
+                 ("hole_min", "hole_max"), ("min_hole", "max_hole"))
+        for lo, hi in lo_hi:
+            if lo in values_mm and hi in values_mm and values_mm[lo] > values_mm[hi]:
+                return f"values_mm {lo} ({values_mm[lo]}) is above {hi} ({values_mm[hi]})"
+        if rule_type == "routing_via":
+            for d, h in (("via_min", "hole_min"), ("via_pref", "hole_pref"), ("via_max", "hole_max")):
+                if d in values_mm and h in values_mm and values_mm[d] <= values_mm[h]:
+                    return f"values_mm {d} must be larger than {h} (a via is wider than its hole)"
+    if rule_type == "routing_via" and not values_mm:
+        return ("routing_via takes its sizes in values_mm: via_min, via_pref, via_max, "
+                "hole_min, hole_pref, hole_max")
+    if style and style not in ("relief", "direct"):
+        return "style must be 'relief' or 'direct'"
+    if style and rule_type not in ("polygon_connect", "plane_connect"):
+        return "style applies to polygon_connect and plane_connect only"
+    return ""
+
+
 def _scope_refusal(expr: str, **extra: Any) -> Optional[dict[str, Any]]:
     """The reply for a scope Altium would misread, or None to go ahead."""
     reason, fixed = scope_problem(expr)
@@ -853,7 +909,8 @@ def register_pcb_tools(mcp):
     async def pcb_run_drc(allow_modal: bool = False,
                           answer_dialogs: bool = False,
                           drc_pours: str = "ask",
-                          allow_repour: bool = False) -> dict[str, Any]:
+                          allow_repour: bool = False,
+                          board_path: str = "") -> dict[str, Any]:
         """Run Design Rule Check on the active PCB. MODAL: Altium's Design
         Rule Checker dialog BLOCKS THE BRIDGE until it is answered, so this
         refuses unless ``allow_modal=True``. PREFER
@@ -878,6 +935,10 @@ def register_pcb_tools(mcp):
             answer_dialogs: let the dialog driver answer the DRC dialogs.
             drc_pours: ask | run_as_is | repour (see above).
             allow_repour: permit the repour, which changes the design.
+            board_path: the .PcbDoc to check. PASS IT: a DRC leaves the
+                HTML report focused, and the next run without a focused
+                board silently re-reads the old report. With a path the
+                board is focused first (pcb_focus_board).
 
         Returns:
             ``violation_count`` (all), ``drc_triggered``,
@@ -913,10 +974,22 @@ def register_pcb_tools(mcp):
                                "changes the design; pass allow_repour=True to "
                                "permit it, or use drc_pours='run_as_is'")}
         bridge = get_bridge()
+        focused = None
+        if board_path:
+            focused = await bridge.send_command_async(
+                "pcb.focus_board", {"board_path": board_path})
+            if isinstance(focused, dict) and focused.get("ok") is False:
+                return {"ok": False, "drc_triggered": False, "focus": focused,
+                        "reason": f"could not focus {board_path} before the DRC"}
         if not answer_dialogs:
-            return await bridge.send_command_async(
+            result = await bridge.send_command_async(
                 "pcb.run_drc", {"allow_modal": "true"})
-        return await _run_drc_answering_dialogs(bridge, drc_pours, allow_repour)
+        else:
+            result = await _run_drc_answering_dialogs(bridge, drc_pours, allow_repour)
+        if focused is not None and isinstance(result, dict):
+            result = dict(result)
+            result["focused_board"] = board_path
+        return result
 
     @mcp.tool()
     async def pcb_get_components() -> dict[str, Any]:
@@ -4008,13 +4081,20 @@ def register_pcb_tools(mcp):
     async def pcb_modify_layer(
         layer: str,
         name: str = "",
-        copper_thickness_mils: int = 0,
+        copper_thickness_mils: float = 0,
         dielectric_type: str = "",
-        dielectric_height_mils: int = 0,
+        dielectric_height_mils: float = 0,
         dielectric_constant: float = 0.0,
         dielectric_material: str = "",
+        copper_thickness_mm: float = 0,
+        dielectric_height_mm: float = 0,
     ) -> dict[str, Any]:
         """Tune properties on an existing copper layer.
+
+        For a whole new stack (named layers, exact thicknesses, any number
+        of inner layers in one write) use pcb_import_layer_stack instead.
+        Thicknesses take fractions (0.6 mil, or 0.0152 mm); they were whole
+        mils only, which forced 1.4 mil copper everywhere.
 
         Every optional parameter is applied only if provided (non-empty
         string / non-zero number). Maps to:
@@ -4034,20 +4114,29 @@ def register_pcb_tools(mcp):
             dielectric_height_mils: New dielectric height in mils (optional)
             dielectric_constant: New Dk value (optional)
             dielectric_material: New dielectric material string (optional)
+            copper_thickness_mm: copper thickness in mm, instead of mils
+            dielectric_height_mm: dielectric height in mm, instead of mils
 
         Returns:
             Dictionary confirming the changes.
         """
+        if copper_thickness_mm:
+            copper_thickness_mils = float(copper_thickness_mm) * MILS_PER_MM
+        if dielectric_height_mm:
+            dielectric_height_mils = float(dielectric_height_mm) * MILS_PER_MM
+        if dielectric_type and dielectric_type not in ("none", "core", "prepreg", "surface"):
+            return {"success": False, "reason":
+                    "dielectric_type must be none, core, prepreg or surface"}
         bridge = get_bridge()
         params: dict[str, str] = {"layer": layer}
         if name:
             params["name"] = name
         if copper_thickness_mils:
-            params["copper_thickness_mils"] = str(copper_thickness_mils)
+            params["copper_thickness_mils"] = f"{float(copper_thickness_mils):.4f}"
         if dielectric_type:
             params["dielectric_type"] = dielectric_type
         if dielectric_height_mils:
-            params["dielectric_height_mils"] = str(dielectric_height_mils)
+            params["dielectric_height_mils"] = f"{float(dielectric_height_mils):.4f}"
         if dielectric_constant:
             params["dielectric_constant"] = str(dielectric_constant)
         if dielectric_material:
@@ -4293,6 +4382,268 @@ def register_pcb_tools(mcp):
         return result
 
     @mcp.tool()
+    async def pcb_set_board_outline(
+        points: list[Any],
+        arc_step_deg: float = 10.0,
+    ) -> dict[str, Any]:
+        """Define the physical PCB board outline as an arbitrary closed polygon.
+
+        Overwrites the current board shape (pcb_set_board_shape only makes a
+        rectangle). Use it for notched or chamfered boards such as
+        edge-connector modules. The shape is closed automatically.
+
+        Args:
+            points: Vertices in order around the outline, in mm in board
+                coordinates (Y up). Each item is [x, y] or {"x":..,"y":..}
+                for a straight edge, or the arc form the offline reader
+                returns in outline_mm: {"x":..,"y":..,"arc":true,
+                "center":[cx,cy],"radius":r,"start_angle":a1,"end_angle":a2}.
+                An arc item starts at its own x,y and ends at the NEXT item's
+                point, sweeping the angle range a1..a2 (degrees, CCW). Arcs
+                are stored as short straight chords.
+            arc_step_deg: Maximum angle per chord when an arc is expanded.
+
+        Returns:
+            Dictionary with the number of vertices written.
+        """
+        import math
+
+        if len(points) < 3:
+            return {"success": False, "error": "at least 3 points are required"}
+
+        def xy(item: Any) -> tuple[float, float]:
+            if isinstance(item, dict):
+                return float(item["x"]), float(item["y"])
+            return float(item[0]), float(item[1])
+
+        pts: list[tuple[float, float]] = []
+        for item in points:
+            px, py = xy(item)
+            pts.append((px, py))
+            if isinstance(item, dict) and item.get("arc"):
+                cx, cy = (float(v) for v in item["center"])
+                radius = float(item["radius"])
+                a1 = float(item["start_angle"])
+                a2 = float(item["end_angle"])
+                if a2 < a1:
+                    a2 += 360.0
+                # The arc begins at whichever end of a1..a2 is at this point.
+                here = math.degrees(math.atan2(py - cy, px - cx))
+                gap = abs((here - a1 + 180.0) % 360.0 - 180.0)
+                from_a1 = gap < 1.0
+                span = a2 - a1
+                steps = max(2, int(math.ceil(span / max(arc_step_deg, 1.0))))
+                for k in range(1, steps):
+                    t = span * k / steps
+                    ang = math.radians(a1 + t if from_a1 else a2 - t)
+                    pts.append((cx + radius * math.cos(ang), cy + radius * math.sin(ang)))
+
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "pcb.set_board_outline",
+            {"points_mm": ";".join(f"{x:.5f},{y:.5f}" for x, y in pts)},
+        )
+        return result
+
+    @mcp.tool()
+    async def pcb_set_sheet_position(
+        fit_margin_mm: float | None = None,
+        x_mm: float | None = None,
+        y_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> dict[str, Any]:
+        """Set the PCB sheet (Design > Board Options > Sheet Position).
+
+        The sheet is the coloured area behind the board. After the outline is
+        changed or shrunk (pcb_set_board_outline / pcb_set_board_shape) the old
+        sheet stays where it was; this moves it with the board.
+
+        Args:
+            fit_margin_mm: Size the sheet to the outline's bounding box plus
+                this margin on every side (e.g. 5.0). Preferred.
+            x_mm, y_mm, width_mm, height_mm: Explicit sheet rectangle (mm,
+                board coordinates). Used only when fit_margin_mm is omitted.
+
+        Returns:
+            The sheet rectangle read back from Altium, with ``verified``.
+        """
+        params: dict[str, str] = {}
+        if fit_margin_mm is not None:
+            params["fit_margin_mm"] = str(fit_margin_mm)
+        else:
+            vals = {"x_mm": x_mm, "y_mm": y_mm, "width_mm": width_mm, "height_mm": height_mm}
+            if any(v is None for v in vals.values()):
+                return {
+                    "success": False,
+                    "error": "give fit_margin_mm, or all of x_mm, y_mm, width_mm, height_mm",
+                }
+            params = {k: str(v) for k, v in vals.items()}
+        bridge = get_bridge()
+        return await bridge.send_command_async("pcb.set_sheet_position", params)
+
+    @mcp.tool()
+    async def pcb_define_board_shape_from_selection(layer: str = "") -> dict[str, Any]:
+        """Design > Board Shape > Define Board Shape from Selected Objects.
+
+        Turns closed tracks/arcs into the board outline. Draw the shape as
+        lines on a mechanical layer, then call this with that layer.
+
+        Args:
+            layer: Layer holding the outline lines (e.g. "Mechanical 1"). Its
+                tracks and arcs are selected and all other tracks/arcs are
+                deselected first. Empty uses the current selection.
+
+        Returns:
+            ``selected`` count and the new ``outline_vertices``.
+        """
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "pcb.define_board_shape_from_selection", {"layer": layer}
+        )
+
+    @mcp.tool()
+    async def pcb_create_primitives_from_board_shape(
+        layer: str = "Mechanical 1",
+        width_mm: float = 0.1,
+    ) -> dict[str, Any]:
+        """Design > Board Shape > Create Primitives From Board Shape.
+
+        Draws the current board outline as one track per edge on a layer
+        (arc edges become straight chords).
+
+        Args:
+            layer: Destination layer, default "Mechanical 1".
+            width_mm: Track width in mm.
+
+        Returns:
+            Number of tracks created.
+        """
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "pcb.create_primitives_from_board_shape",
+            {"layer": layer, "width_mm": str(width_mm)},
+        )
+
+    @mcp.tool()
+    async def pcb_sync_layer_stack_region() -> dict[str, Any]:
+        """Rebuild a single layer stack region from the active PCB outline.
+
+        Requires a saved PCB, a straight-segment outline, and Mechanical 1
+        free of tracks and arcs. Saves the PCB and verifies the persisted region.
+        """
+        import struct
+
+        import olefile
+
+        bridge = get_bridge()
+        active = await bridge.send_command_async("application.get_active_document")
+        path = active.get("file_path", "")
+        if not path.lower().endswith(".pcbdoc") or active.get("modified") is not False:
+            return {"success": False, "error": "Activate and save the target PCB first."}
+
+        def read_region():
+            with olefile.OleFileIO(path) as board:
+                header = board.openstream("BoardRegions/Header").read()
+                data = board.openstream("BoardRegions/Data").read()
+            marker = b"|LAYERSTACKID="
+            if (header != b"\x01\x00\x00\x00"
+                    or b"|OBJECTKIND=BoardRegion|BENDINGLINECOUNT=0|" not in data
+                    or marker not in data):
+                raise ValueError("Expected one board region without bending lines.")
+            stack_end = data.index(b"\x00", data.index(marker))
+            count, = struct.unpack_from("<I", data, stack_end + 1)
+            points = list(struct.iter_unpack("<dd", data[stack_end + 5:]))
+            if count < 3 or count != len(points):
+                raise ValueError("Unsupported BoardRegions vertex record.")
+            return data[data.index(marker):stack_end], points
+
+        try:
+            stack_id, _ = read_region()
+        except (OSError, ValueError, struct.error) as exc:
+            return {"success": False, "error": str(exc)}
+
+        outline = await bridge.send_command_async("pcb.get_board_outline", {})
+        vertices = outline.get("vertices", [])
+        if (not outline.get("closed") or len(vertices) < 3
+                or any(v.get("kind") != "line" for v in vertices)):
+            return {"success": False, "error": "Expected a closed straight-segment outline."}
+
+        track_filter = {"scope": "active_doc", "filter": "Layer=Mechanical1"}
+        for kind in ("eTrackObject", "eArcObject"):
+            query = await bridge.send_command_async(
+                "generic.query_objects",
+                {**track_filter, "object_type": kind, "properties": "Layer", "limit": "1"},
+            )
+            if query.get("count") != 0 or query.get("objects") != []:
+                return {"success": False, "error": "Mechanical 1 must have no tracks or arcs."}
+
+        try:
+            created = await pcb_create_primitives_from_board_shape()
+            if not created.get("success") or created.get("tracks") != len(vertices):
+                return {"success": False, "error": "Could not stage the outline.", "detail": created}
+            rebuilt = await pcb_define_board_shape_from_selection("Mechanical 1")
+        finally:
+            cleanup = await bridge.send_command_async(
+                "generic.delete_objects", {**track_filter, "object_type": "eTrackObject"},
+            )
+        if not cleanup.get("success") or cleanup.get("matched") != len(vertices):
+            return {"success": False, "error": "Temporary track cleanup could not be verified.",
+                    "detail": cleanup}
+        if not rebuilt.get("success"):
+            return {"success": False, "error": "Altium did not rebuild the outline.", "detail": rebuilt}
+
+        saved = await bridge.send_command_async(
+            "application.save_document", {"file_path": path}, timeout=60.0,
+        )
+        if not saved.get("saved"):
+            return {"success": False, "error": "Altium did not verify the save.", "save": saved}
+        try:
+            new_stack_id, points = read_region()
+        except (OSError, ValueError, struct.error) as exc:
+            return {"success": False, "error": str(exc), "save": saved}
+
+        # Live outline readback rounds to integer mils. Match within one mil
+        # and allow Altium to reorder the starting vertex or reverse winding.
+        expected = [(v["x"], v["y"]) for v in vertices]
+        actual = [(x / 10000, y / 10000) for x, y in points]
+        count = len(expected)
+        matched = len(actual) == count and any(
+            all(abs(x - actual[(start + direction * i) % count][0]) <= 1
+                and abs(y - actual[(start + direction * i) % count][1]) <= 1
+                for i, (x, y) in enumerate(expected))
+            for start in range(count) for direction in (1, -1)
+        )
+        verified = matched and stack_id == new_stack_id
+        return {"success": verified, "verified": verified, "region_vertices": len(points),
+                "save": saved, "file_path": path}
+
+    @mcp.tool()
+    async def pcb_add_board_cutout(points: list[Any]) -> dict[str, Any]:
+        """Design > Board Shape > Define Board Cutout, from a polygon.
+
+        Args:
+            points: Vertices in order, mm in board coordinates, each [x, y]
+                or {"x":..,"y":..}. Closed automatically, at least 3.
+
+        Returns:
+            Vertex count and ``board_cutout`` (the region kind read back).
+        """
+        if len(points) < 3:
+            return {"success": False, "error": "at least 3 points are required"}
+        pts = []
+        for item in points:
+            if isinstance(item, dict):
+                pts.append((float(item["x"]), float(item["y"])))
+            else:
+                pts.append((float(item[0]), float(item[1])))
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "pcb.add_board_cutout",
+            {"points_mm": ";".join(f"{x:.5f},{y:.5f}" for x, y in pts)},
+        )
+
+    @mcp.tool()
     async def pcb_place_polygon_rect(
         x1: int,
         y1: int,
@@ -4386,6 +4737,218 @@ def register_pcb_tools(mcp):
                 "high_layer": high_layer,
             },
         )
+        return result
+
+    @mcp.tool()
+    async def pcb_get_drill_pairs(pcb_path: str) -> dict[str, Any]:
+        """List the board's drill pairs (via types) from the SAVED PcbDoc.
+
+        Reads the LAYERPAIRn LOW/HIGH keys of the board record on disk, so
+        save first (app_save_all). Layer names are the file's: TOP, MID1..,
+        BOTTOM (MID2 = MidLayer2, i.e. the third copper layer).
+
+        Args:
+            pcb_path: Full path of the .PcbDoc.
+
+        Returns:
+            ``pairs``: [{index, low, high}], ``count``.
+        """
+        try:
+            data = open(pcb_path, "rb").read()
+        except OSError as exc:
+            return {"ok": False, "error": f"cannot read {pcb_path}: {exc}"}
+        found: dict[int, dict[str, Any]] = {}
+        for m in re.finditer(rb"\|LAYERPAIR(\d+)(LOW|HIGH)=([A-Z0-9]+)", data):
+            i = int(m.group(1))
+            found.setdefault(i, {"index": i})[m.group(2).decode().lower()] = m.group(3).decode()
+        pairs = [found[i] for i in sorted(found)]
+        return {"ok": True, "pairs": pairs, "count": len(pairs)}
+
+    @mcp.tool()
+    async def pcb_add_drill_pair(
+        low_layer: str,
+        high_layer: str,
+        park_x: float = -400,
+        park_y: float = -400,
+    ) -> dict[str, Any]:
+        """Add a drill pair (via type) such as a blind L1-L3 pair.
+
+        Altium's scripting API exposes drill pairs read-only, but Altium
+        creates the pair itself when a via with that span is placed. This
+        places one temporary no-net via with the span OFF the board at
+        (park_x, park_y) mils, then deletes it; the pair stays. Save
+        (app_save_all) and confirm with pcb_get_drill_pairs. Tested on
+        AD26: TopLayer-MidLayer2 and MidLayer5-BottomLayer.
+
+        Args:
+            low_layer: Start layer, e.g. "TopLayer" or "MidLayer5".
+            high_layer: End layer, e.g. "MidLayer2" or "BottomLayer".
+            park_x: X (mils) for the temporary via; keep it off the board.
+            park_y: Y (mils) for the temporary via; keep it off the board.
+
+        Returns:
+            ``placed`` (the temporary via), ``deleted`` (match count).
+        """
+        from ..scope import to_wire as _scope_to_wire
+        bridge = get_bridge()
+        placed = await bridge.send_command_async("pcb.place_via", {
+            "x": _mils(park_x), "y": _mils(park_y),
+            "size": _mils(0.4 * MILS_PER_MM), "hole_size": _mils(0.2 * MILS_PER_MM),
+            "low_layer": low_layer, "high_layer": high_layer,
+        })
+        deleted = await bridge.send_command_async("generic.delete_objects", {
+            "scope": _scope_to_wire("active_doc"), "object_type": "eViaObject",
+            "filter": f"X={_mils(park_x)}|Y={_mils(park_y)}",
+        })
+        return {"ok": True, "placed": placed, "deleted": deleted,
+                "next": "app_save_all, then pcb_get_drill_pairs to confirm"}
+
+    @mcp.tool()
+    async def pcb_import_layer_stack(
+        pcb_path: str,
+        layers: list[dict[str, Any]],
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Replace the WHOLE layer stack in one call: names, exact copper and
+        dielectric thicknesses, core/prepreg, Dk, material, any number of
+        inner layers. Do it on a fresh board, before placement and routing.
+
+        The layer-by-layer tools cannot build most real stacks: pcb_add_layer
+        puts every signal layer above every plane, names and fractional
+        thicknesses did not stick, and an 8-layer stack took dozens of
+        calls. This builds Altium's own stack text and imports it with
+        MasterLayerStack.Import_FromParameters (the call the Kame FMU
+        automation made on AD26).
+
+        Inner copper is SIGNAL copper (MidLayer1..). For a GND or power
+        plane, make the layer signal copper and pour it (pcb_place_polygon_rect);
+        internal plane layers are not written by this tool.
+
+        Save the board first: the current stack is read from the SAVED file
+        (exporting it from a script crashes Altium). After the import, save
+        (app_save_all) and check with pcb_read_stackup.
+
+        Args:
+            pcb_path: The saved .PcbDoc (the one open in Altium).
+            layers: Top to bottom, copper and dielectric alternating,
+                copper first and last. Copper: {"type": "copper", "name":
+                "L1_Top", "thickness_mm": 0.035}. Dielectric: {"type":
+                "dielectric", "kind": "core" | "prepreg", "height_mm":
+                0.0762, "er": 3.9, "material": "1080", "name": optional}.
+            dry_run: True (default) validates and reports the layers and
+                thickness without touching Altium.
+
+        Returns:
+            ``layers`` (the names, in order, surface layers included),
+            ``board_thickness_mm``, ``removed`` (copper of the saved stack
+            the new one drops; objects on them are orphaned), and for a
+            real run ``imported`` plus ``next``.
+        """
+        from ..offline.files.stack_params import (
+            board_thickness_mm, build_stack_params, read_stack_params,
+            removed_layers, validate_plan)
+        from ..config import get_config
+        problems = validate_plan(layers)
+        if problems:
+            return {"ok": False, "problems": problems}
+        try:
+            current = read_stack_params(pcb_path)
+            text, names = build_stack_params(current, layers)
+            removed = removed_layers(current, layers)
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        out: dict[str, Any] = {
+            "ok": True, "dry_run": dry_run, "layers": names,
+            "copper_layers": (len(layers) + 1) // 2,
+            "board_thickness_mm": board_thickness_mm(layers),
+            "removed": removed,
+        }
+        if removed:
+            out["warning"] = (f"the saved stack has copper the new one drops: {removed}. "
+                              "Anything on those layers is orphaned; import before routing.")
+        if dry_run:
+            out["next"] = "pcb_import_layer_stack(..., dry_run=False)"
+            return out
+        work = get_config().workspace_dir / "stack_import"
+        work.mkdir(parents=True, exist_ok=True)
+        param_file = work / "stack_params.txt"
+        param_file.write_text(text, encoding="cp1252")
+        bridge = get_bridge()
+        result = await bridge.send_command_async(
+            "pcb.import_layer_stack", {"path": str(param_file)}, timeout=120.0)
+        out["imported"] = bool(isinstance(result, dict) and result.get("imported"))
+        out["bridge"] = result
+        if not out["imported"]:
+            out["ok"] = False
+            out["reason"] = "Altium did not accept the stack text; the stack is unchanged"
+        else:
+            out["next"] = ("app_save_all, then pcb_read_stackup to confirm names, "
+                           "thicknesses and core/prepreg")
+        return out
+
+    @mcp.tool()
+    async def pcb_audit_rules(
+        pcb_path: str,
+        min_width_mm: float | None = None,
+        default_width_mm: float | None = None,
+        min_clearance_mm: float | None = None,
+        via_diameter_mm: float | None = None,
+        via_hole_mm: float | None = None,
+        mask_sliver_mm: float | None = None,
+        mask_expansion_mm: float | None = None,
+        diff_pair_width_mm: float | None = None,
+        diff_pair_gap_mm: float | None = None,
+        signoff: bool = False,
+    ) -> dict[str, Any]:
+        """Check a board's design rules against the design, DEFAULTS FIRST.
+
+        Run it after creating rules and before routing, and again at
+        sign-off (``signoff=True``). Every blank Altium board has rules
+        scoped to All (Width 10 mil, RoutingVias 50/28 mil, pair width
+        10-15 mil, mask sliver 10 mil ...) that stay the FALLBACK for every
+        net your class rules miss. This names each one that fights the
+        design, pair rules whose width was never set, rules that can never
+        apply (same scope, lower priority), and rules switched off for
+        routing, each with the exact pcb_set_rule_properties /
+        pcb_delete_design_rule / pcb_create_design_rule call that fixes it.
+
+        Reads the SAVED file: app_save_all first. Every limit is optional;
+        give the ones the brief or fab sets.
+
+        Args:
+            pcb_path: The .PcbDoc.
+            min_width_mm: the design's minimum track width.
+            default_width_mm: preferred width for unclassed nets.
+            min_clearance_mm: board-wide clearance.
+            via_diameter_mm / via_hole_mm: the board's standard via.
+            mask_sliver_mm: the fab's minimum solder-mask dam.
+            mask_expansion_mm: the design's mask expansion.
+            diff_pair_width_mm / diff_pair_gap_mm: the pair geometry.
+            signoff: disabled sign-off rules (UnRoutedNet, silk, sliver)
+                become failures instead of notes.
+
+        Returns:
+            ``ok`` (no failures), ``counts``, ``findings`` [{severity,
+            rule, kind, issue, fix: {tool, arguments}, alternative}],
+            ``defaults_present``.
+        """
+        from pathlib import Path as _Path
+        from ..analysis.rule_audit import audit_rules
+        from ..offline.files.pcbdoc import read_pcbdoc
+        try:
+            doc = read_pcbdoc(_Path(pcb_path), primitives=False)
+        except Exception as exc:  # noqa: BLE001 - an unreadable file is an answer
+            return {"ok": False, "error": f"cannot read {pcb_path}: {exc}"}
+        pairs = [p for p in re.findall(rb"\|LAYERPAIR\d+LOW=([A-Z0-9]+)\|LAYERPAIR\d+HIGH=([A-Z0-9]+)",
+                                       open(pcb_path, "rb").read())]
+        blind = any(low != b"TOP" or high != b"BOTTOM" for low, high in pairs)
+        result = audit_rules(
+            doc.rules, min_width_mm=min_width_mm, default_width_mm=default_width_mm,
+            min_clearance_mm=min_clearance_mm, via_diameter_mm=via_diameter_mm,
+            via_hole_mm=via_hole_mm, mask_sliver_mm=mask_sliver_mm,
+            mask_expansion_mm=mask_expansion_mm, diff_pair_width_mm=diff_pair_width_mm,
+            diff_pair_gap_mm=diff_pair_gap_mm, has_blind_vias=blind, signoff=signoff)
+        result["pcb_path"] = pcb_path
         return result
 
     @mcp.tool()
@@ -4679,18 +5242,34 @@ def register_pcb_tools(mcp):
         scope: str = "",
         net_scope: str = "different_nets",
         allowed: Optional[bool] = None,
+        scope2: str = "",
+        values_mm: Optional[dict[str, float]] = None,
+        style: str = "",
+        entries: Optional[int] = None,
     ) -> dict[str, Any]:
         """Create a new design rule on the active PCB.
+
+        Prefer ``values_mm``: it is exact (0.1 mm is not a whole number of
+        mils) and is the only way to set a pair rule's WIDTH. The reply
+        carries Altium's ``descriptor`` of the new rule; read it to confirm
+        the values landed. Before adding class rules, run pcb_audit_rules:
+        Altium's blank-board rules scoped to All stay the fallback for
+        every net your rules miss.
 
         Args:
             name: Rule name (e.g., "Min Clearance 6mil").
             rule_type: "clearance" (value = gap), "width" (value = min,
-                max_value/favored_value optional), "via_size" (value = min
-                hole), "differential_pairs" (value = min gap, max_value,
-                favored_value, max_uncoupled_length),
-                "solder_mask_expansion" / "paste_mask_expansion" (value =
-                SIGNED radial expansion; negative with scope "IsVia" tents
-                vias), "vias_under_smd" (set ``allowed``, not value).
+                max_value/favored_value optional), "via_size" (hole-size
+                limits: value = min hole), "differential_pairs" (value = min
+                gap, max_value, favored_value, max_uncoupled_length; widths
+                only through values_mm), "solder_mask_expansion" /
+                "paste_mask_expansion" (value = SIGNED radial expansion;
+                negative with scope "IsVia" tents vias), "vias_under_smd"
+                (set ``allowed``, not value), "routing_via" (the via the
+                routers place, scoped: values_mm only), "polygon_connect" /
+                "plane_connect" (``style`` relief|direct, values_mm
+                conductor/air_gap[/expansion], ``entries``),
+                "plane_clearance", "annular_ring", "solder_mask_sliver".
             value: Primary value in mils (the MIN for ranged kinds).
             max_value: MAX for ranged kinds (default 5x value).
             favored_value: Preferred value (default value).
@@ -4699,25 +5278,54 @@ def register_pcb_tools(mcp):
             scope: Query for Scope1, matching the kind: "InNet('GND')",
                 "InNetClass('Power')" or "All" for net rules;
                 "InDifferentialPair('USB')" or "IsDifferentialPair" for
-                pairs (InNet on a pair rule never matches). Bracket
+                pairs (InNet on a pair rule never matches). A layer-specific
+                rule is a scope: "InNetClass('DDR') And OnLayer('Top Layer')"
+                at a higher priority than the class rule. Bracket
                 comparisons: "IsPad And (HoleSize > 3)"; the unbracketed
-                form is refused with ``suggested_scope``.
+                form is refused with ``suggested_scope``. A copper-to-edge
+                rule is a clearance rule with scope
+                "IsBoardOutline Or IsBoardCutoutRegion".
             net_scope: "different_nets" (default), "any_net" or
                 "same_net"; ignored by pair, mask and via-in-pad rules.
             allowed: vias_under_smd only: False forbids via-in-pad.
                 Omitted means True, Altium's default.
+            scope2: Query for the second object of a binary rule
+                (clearance A-to-B, a polygon connect from pours to
+                "InNetClass('GND') And IsVia"). Default All.
+            values_mm: exact values in mm, by rule type:
+                clearance {gap}; width {min_width, max_width, pref_width};
+                via_size {min_hole, max_hole}; differential_pairs
+                {min_width, max_width, pref_width, min_gap, max_gap,
+                pref_gap, max_uncoupled}; solder/paste mask {expansion};
+                routing_via {via_min, via_max, via_pref, hole_min,
+                hole_max, hole_pref}; polygon_connect {conductor,
+                air_gap}; plane_connect {conductor, air_gap, expansion};
+                plane_clearance {clearance}; annular_ring {min};
+                solder_mask_sliver {gap}.
+            style: polygon_connect / plane_connect: "relief" (default) or
+                "direct".
+            entries: relief spokes, 2 or 4 (default 4).
 
         Returns:
-            Dictionary with created rule details.
+            Dictionary with created rule details and ``descriptor``.
 
-        Component, hole-to-hole and board-outline clearance rules cannot
-        be created on this Altium build; existing ones can be changed
-        with pcb_set_rule_properties.
+        Component, hole-to-hole and Altium's own board-outline clearance
+        rules cannot be created on this Altium build; existing ones can be
+        changed with pcb_set_rule_properties. Matched-length,
+        max-via-count and routing-topology rules cannot be created by
+        script at all: see tool_guide("matched length").
         """
         if scope:
             refusal = _scope_refusal(scope, created=False)
             if refusal:
                 return refusal
+        if scope2:
+            refusal = _scope_refusal(scope2, created=False)
+            if refusal:
+                return refusal
+        problem = _rule_mm_problem(rule_type, values_mm, style)
+        if problem:
+            return {"created": False, "ok": False, "reason": problem}
         bridge = get_bridge()
         params: dict[str, Any] = {
             "name": name,
@@ -4733,8 +5341,16 @@ def register_pcb_tools(mcp):
             params["max_uncoupled_length"] = str(max_uncoupled_length)
         if scope:
             params["scope"] = scope
+        if scope2:
+            params["scope2"] = scope2
         if allowed is not None:
             params["allowed"] = "true" if allowed else "false"
+        if style:
+            params["style"] = style
+        if entries is not None:
+            params["entries"] = str(int(entries))
+        for key, v in (values_mm or {}).items():
+            params["mm_" + key] = repr(float(v))
         result = await bridge.send_command_async("pcb.create_design_rule", params)
         return result
 
@@ -5864,8 +6480,24 @@ def register_pcb_tools(mcp):
         min_via_hole_mils: float | None = None,
         max_via_hole_mils: float | None = None,
         preferred_via_hole_mils: float | None = None,
+        min_width_mm: float | None = None,
+        max_width_mm: float | None = None,
+        favored_width_mm: float | None = None,
+        dp_min_width_mm: float | None = None,
+        dp_max_width_mm: float | None = None,
+        dp_pref_width_mm: float | None = None,
+        dp_min_gap_mm: float | None = None,
+        dp_max_gap_mm: float | None = None,
+        dp_pref_gap_mm: float | None = None,
+        dp_max_uncoupled_mm: float | None = None,
     ) -> dict[str, Any]:
         """Update metadata AND constraint values of a named PCB design rule.
+
+        THIS IS HOW A DEFAULT RULE IS FIXED. Altium's blank-board rules
+        (Width, RoutingVias, DiffPairsRouting, MinimumSolderMaskSliver ...)
+        are scoped to All and stay the fallback for every object your own
+        rules miss; pcb_audit_rules names each one that fights the design
+        and the exact call here that fixes it.
 
         Pass only what should change. Constraint fields by rule kind:
         clearance kinds (Clearance, ComponentClearance, HoleToHole,
@@ -5892,6 +6524,14 @@ def register_pcb_tools(mcp):
                 Width constraint values (applied to every layer).
             min_hole_size_mils / max_hole_size_mils: HoleSize
                 constraint limits.
+            min_width_mm / max_width_mm / favored_width_mm: Width rule
+                values in mm (exact; 0.1 mm is not a whole mil).
+            dp_min_width_mm / dp_max_width_mm / dp_pref_width_mm,
+            dp_min_gap_mm / dp_max_gap_mm / dp_pref_gap_mm,
+            dp_max_uncoupled_mm: a Differential Pairs Routing rule's
+                widths, gaps and uncoupled length, every layer. The pair
+                router uses THIS width, not the Width rule's. Read back:
+                ``diff_pair_written``, ``diff_pair_mm``, ``descriptor``.
 
         Returns:
             Dict with name, rule_kind, and properties_updated count.
@@ -5918,6 +6558,16 @@ def register_pcb_tools(mcp):
             ("min_via_hole_mils", min_via_hole_mils),
             ("max_via_hole_mils", max_via_hole_mils),
             ("preferred_via_hole_mils", preferred_via_hole_mils),
+            ("min_width_mm", min_width_mm),
+            ("max_width_mm", max_width_mm),
+            ("favored_width_mm", favored_width_mm),
+            ("dp_min_width_mm", dp_min_width_mm),
+            ("dp_max_width_mm", dp_max_width_mm),
+            ("dp_pref_width_mm", dp_pref_width_mm),
+            ("dp_min_gap_mm", dp_min_gap_mm),
+            ("dp_max_gap_mm", dp_max_gap_mm),
+            ("dp_pref_gap_mm", dp_pref_gap_mm),
+            ("dp_max_uncoupled_mm", dp_max_uncoupled_mm),
         ]:
             if value is not None:
                 params[key] = str(value)
@@ -5933,6 +6583,12 @@ def register_pcb_tools(mcp):
             result["ok"] = False
             result["reason"] = result.get("enabled_note") or (
                 "enabled did not read back; delete and recreate the rule")
+        if isinstance(result, dict) and result.get("diff_pair_written") is False:
+            result = dict(result)
+            result["ok"] = False
+            result["reason"] = result.get("diff_pair_note") or (
+                "a pair-rule value did not read back; delete the rule and recreate it "
+                "with pcb_create_design_rule(rule_type='differential_pairs', values_mm=...)")
         return result
 
     @mcp.tool()

@@ -42,9 +42,9 @@ is placed and routed to it and checked against it.
    (`route_refcopy`, when the parts are where the reference has them), pairs,
    critical nets, bulk, `route_situs` to finish, repour, DRC, `route_converge`
    until done or escalated (with the reference placement it copies clashing
-   nets from the reference). Pours box autorouters in: there is no shelve tool
-   yet, so ask the user to shelve them for the routing pass (Tools > Polygon
-   Pours > Shelve) or rely on Freerouting, which takes them as planes. Save;
+   nets from the reference). Pours box Situs in: there is no shelve tool yet,
+   so ask the user to shelve them for the Situs pass (Tools > Polygon Pours >
+   Shelve). Save;
    `design_gate_review(gate="routing")`.
 6. **Vias**: `route_via_style(profile=<name>)`; fix sizes, then
    `route_set_via_tenting` (dry run first) and confirm `verified` from the file.

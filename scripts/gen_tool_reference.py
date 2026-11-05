@@ -52,7 +52,7 @@ def _collect() -> list[dict]:
     from altium_agent.tools import metadata as M
 
     mcp = FastMCP("gen")
-    register_backend(mcp, "altium")
+    register_backend(mcp, "altium", "full")
     tools = asyncio.run(mcp.list_tools())
     out = []
     for t in tools:

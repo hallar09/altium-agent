@@ -1,0 +1,49 @@
+{
+  "about": "Finished boards laid out by people: the yardstick for the placement and routing benchmark (python -m altium_agent.bench). Paths are read, never written; every run works on copies. 'fixed' is what a brief would pin (connectors, mounting holes, parts the designer locked); 'auto' derives it, 'extra_fixed' adds to it. 'tier' orders boards from easy to hard. 'antennas' answers place_plan's antenna question for RF modules (side, depth, beyond in mm, or 'none'); each is taken from the person's board, and 'antennas_source' says how.",
+  "boards": [
+    {
+      "id": "wifi",
+      "tier": 1,
+      "project": "C:/Users/Public/Documents/Altium/AD26/Examples/Mini PC/Mini PC - WiFi/WiFi_miniPCIe.PrjPcb",
+      "pcb": "WiFi.PcbDoc",
+      "fixed": "auto",
+      "notes": "Mini PCIe WiFi card, 4 layers, 28 parts, most on the bottom side. Card edge fixed by the form factor.",
+      "antennas": {
+        "U1": "none"
+      },
+      "antennas_source": "The person drew no keep-out and poured GND on every layer under U1 (SPWF01SA), across the whole card."
+    },
+    {
+      "id": "bluetooth",
+      "tier": 1,
+      "project": "C:/Users/Public/Documents/Altium/AD26/Examples/Bluetooth Sentinel/Bluetooth_Sentinel.PrjPcb",
+      "pcb": "Bluetooth_Sentinel.PcbDoc",
+      "fixed": "auto",
+      "notes": "Bluetooth module, 4 layers, 73 parts, GND poured on every layer, chip antenna."
+    },
+    {
+      "id": "kame",
+      "tier": 2,
+      "project": "C:/Users/Public/Documents/Altium/Sample - Kame_FMU/Kame_FMU.PrjPcb",
+      "pcb": "Kame_FMU.PcbDoc",
+      "fixed": "auto",
+      "notes": "Flight controller, 6 layers, 102 parts on both sides; connectors and the IMU locked."
+    },
+    {
+      "id": "sl1",
+      "tier": 2,
+      "project": "C:/Users/Public/Documents/Altium/AD26/Examples/SpiritLevel-SL1/SL1 Xilinx Spartan-IIE PQ208 Rev1.02.PrjPcb",
+      "pcb": "SL1 Xilinx Spartan-IIE PQ208 Rev1.02.PcbDoc",
+      "fixed": "auto",
+      "notes": "FPGA board, 2 layers, 115 parts, PQ208 and an LCD locked."
+    },
+    {
+      "id": "sodimm",
+      "tier": 3,
+      "project": "C:/Users/Public/Documents/Altium/AD26/Examples/Mini PC/Mini PC - SODIMM/PC4-SODIMM_V200_RC_A1_20141015.PrjPcb",
+      "pcb": "PC4-SODIMM_V200_RC_A1_20141015.PcbDoc",
+      "fixed": "auto",
+      "notes": "DDR4 SODIMM, 8 layers, 199 parts; the eight DRAMs and the edge connector are fixed, so placement is the passives around them."
+    }
+  ]
+}

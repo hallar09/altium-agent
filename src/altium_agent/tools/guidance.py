@@ -401,6 +401,156 @@ _RECIPES: tuple[dict[str, Any], ...] = (
             "confirm=true."),
     },
     {
+        "task": "Set up design rules, and fix or delete Altium's default rules",
+        "keywords": ("rule", "rules", "default", "defaults", "fallback", "priority",
+                     "constraint", "audit", "width", "clearance", "sliver"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_audit_rules", "pcb_set_rule_properties", "pcb_delete_design_rule",
+                "pcb_create_design_rule", "pcb_get_design_rules"],
+        "avoid": [
+            ("obj_query", "returns a rule's Descriptor with a BLANK Name, so it cannot "
+                          "target one rule; use pcb_get_design_rules / pcb_get_rule_properties"),
+            ("app_set_dialog_control", "driving the Rules and Constraints Editor has crashed "
+                                       "Altium; every value below is settable by API"),
+        ],
+        "note": (
+            "Altium uses the highest-priority rule whose scope matches. Every blank board has "
+            "rules scoped to All (Width 10 mil, RoutingVias 50/28 mil, DiffPairsRouting 10-15 "
+            "mil, MinimumSolderMaskSliver 10 mil, SolderMaskExpansion 4 mil) that stay the "
+            "FALLBACK for every net your class rules miss. Order: save, pcb_audit_rules with the "
+            "brief's limits, apply each finding's fix (change the default's VALUES with "
+            "pcb_set_rule_properties, or delete it once a rule of yours scoped All replaces it), "
+            "create class rules with pcb_create_design_rule(values_mm=...), audit again. "
+            "Priority cannot be set by script: a new rule lands at the lowest priority of its "
+            "kind, so a rule that must win over an existing one is made by deleting the other "
+            "first and recreating it after. Rule enable flags do not reliably stick on AD26; "
+            "the tools read them back and say so."),
+    },
+    {
+        "task": "Set differential pair width, gap and uncoupled length",
+        "keywords": ("differential", "diff", "pair", "pairs", "width", "gap", "uncoupled",
+                     "impedance", "dqs", "usb", "lvds"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_create_design_rule", "pcb_set_rule_properties", "pcb_create_diff_pair",
+                "analyze_si_impedance"],
+        "avoid": [
+            ("pcb_create_net_class", "a Width rule on the pair's class does NOT set the pair "
+                                     "router's width; the pair rule's own width does"),
+        ],
+        "note": (
+            "Create: pcb_create_design_rule(rule_type='differential_pairs', "
+            "scope='InDifferentialPairClass(...)' or 'IsDifferentialPair', values_mm={min_width, "
+            "pref_width, max_width, min_gap, pref_gap, max_gap, max_uncoupled}). Fix an existing "
+            "one, including Altium's default DiffPairsRouting: pcb_set_rule_properties(name, "
+            "dp_min_width_mm=..., dp_pref_width_mm=..., dp_max_width_mm=..., dp_*_gap_mm=...); "
+            "it reads back. Different geometry per layer (microstrip vs stripline) is one rule "
+            "per layer: scope \"IsDifferentialPair And OnLayer('Top Layer')\" created before the "
+            "general one. Keep every Width rule covering the pair nets wide enough for the pair "
+            "width, or every pair track fails DRC."),
+    },
+    {
+        "task": "Build the layer stack-up: names, thicknesses, core and prepreg",
+        "keywords": ("stack", "stackup", "stack-up", "layer", "layers", "dielectric", "core",
+                     "prepreg", "thickness", "interleave"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_import_layer_stack", "pcb_read_stackup", "analyze_si_impedance",
+                "pcb_modify_layer"],
+        "avoid": [
+            ("pcb_add_layer", "inserts every signal layer above every plane, so GND/SIG/PWR "
+                              "orders cannot be built with it; import the stack instead"),
+        ],
+        "note": (
+            "One call: save, pcb_import_layer_stack(pcb_path, layers=[copper, dielectric, copper, "
+            "...], dry_run=True) to check names and total thickness, then dry_run=False, "
+            "app_save_all, pcb_read_stackup. Inner copper is signal copper: a GND or power "
+            "'plane' is a signal layer with a pour (pcb_place_polygon_rect), which is what every "
+            "board here has used. Do it before placement. pcb_read_stackup reads core/prepreg "
+            "correctly since 2026-11; before that it read them one off (prepreg as core), so a "
+            "stack 'corrected' to match it is wrong in the file."),
+    },
+    {
+        "task": "Add blind or buried vias (via types, drill pairs)",
+        "keywords": ("blind", "buried", "microvia", "drill", "pair", "via", "type", "types",
+                     "span", "layerpairs", "hdi"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_add_drill_pair", "pcb_get_drill_pairs", "route_session_draw", "pcb_place_vias",
+                "pcb_place_via", "pcb_create_design_rule"],
+        "avoid": [
+            ("route_session_route", "the engine places THROUGH vias only; draw blind or buried "
+                                    "escapes with route_session_draw(via_span='span')"),
+        ],
+        "note": (
+            "1) pcb_add_drill_pair(low_layer='TopLayer', high_layer='MidLayer2') per span (it "
+            "places and deletes a parked via; Altium keeps the pair; placing any via with a new "
+            "span does the same), save, pcb_get_drill_pairs. 2) In a routing session, "
+            "route_session_draw(via_span='span') makes each layer change a via from exactly the layer "
+            "left to the layer reached (TopLayer->MidLayer2 = blind L1-L3, MidLayer2->MidLayer5 = "
+            "buried); the checks count it only on those layers and route_session_export / "
+            "route_import_ses place it with them. Outside a session: pcb_place_vias (per-via "
+            "low_layer/high_layer) or pcb_place_via. 3) The LayerPairs "
+            "rule flags a via whose span has no drill pair. 4) A routing_via rule scoped to the "
+            "nets that escape blind sets the size the routers use. Check the NC drill output "
+            "splits per pair before release."),
+    },
+    {
+        "task": "Set the via size the routers place, per class",
+        "keywords": ("via", "vias", "routing", "size", "hole", "drill", "style", "fanout"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_create_design_rule", "pcb_set_rule_properties", "route_via_style",
+                "pcb_apply_via_template"],
+        "avoid": [
+            ("pcb_place_via", "places one via; it does not change what a router or "
+                              "interactive routing drops"),
+        ],
+        "note": (
+            "The router uses the Routing Via rule. Altium's default RoutingVias is 50/28 mil, "
+            "scoped All: change it with pcb_set_rule_properties(name='RoutingVias', "
+            "min/preferred/max_via_size_mils, *_via_hole_mils) or add a scoped one with "
+            "pcb_create_design_rule(rule_type='routing_via', scope=\"InNetClass('DDR')\", "
+            "values_mm={via_min, via_pref, via_max, hole_min, hole_pref, hole_max}). Keep the "
+            "HoleSize rule's minimum at or below the hole."),
+    },
+    {
+        "task": "Set pour and plane connect style (relief or direct) and plane clearance",
+        "keywords": ("connect", "relief", "thermal", "spoke", "direct", "antipad",
+                     "polygonconnect", "planeconnect"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_create_design_rule", "pcb_delete_design_rule", "pcb_repour_polygons"],
+        "avoid": [],
+        "note": (
+            "pcb_create_design_rule(rule_type='polygon_connect', style='relief'|'direct', "
+            "values_mm={conductor, air_gap}, entries=4, scope=..., scope2=...); for example "
+            "direct GND vias: scope 'IsPolygon', scope2 \"InNetClass('GND') And IsVia\". "
+            "plane_connect adds values_mm.expansion; plane_clearance takes {clearance}. Delete "
+            "Altium's default of the same kind if it would win, then repour."),
+    },
+    {
+        "task": "Route a board: rules and stack first, then critical nets",
+        "keywords": ("route", "routing", "router", "autoroute", "escape", "fanout", "length",
+                     "matched", "tune", "serpentine", "drc"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_audit_rules", "route_session_start", "route_session_route",
+                "route_power_fanout", "pcb_run_drc", "analyze_drc_report"],
+        "avoid": [
+            ("pcb_set_rules_enabled", "disabling noisy rules for a run is fine; leaving them "
+                                      "off is not: pcb_audit_rules(signoff=True) lists them"),
+        ],
+        "note": (
+            "Before any copper: stack (pcb_import_layer_stack), net classes and pairs, rules, "
+            "then pcb_audit_rules until it passes. Clamshell or fine-pitch BGAs need via types "
+            "decided BEFORE placement (blind vias change what fits). Route pairs and critical "
+            "nets first, power fan-out next, then the rest; repour last. pcb_run_drc(board_path"
+            "=...) so the report is fresh. Lengths are matched by measurement "
+            "(analyze_si_pair_skew), not by a rule the script can create."),
+    },
+    {
         "task": "Place or adjust a 3D body on a board",
         "keywords": ("3d", "body", "step", "model", "board", "opacity",
                      "transparent", "standoff", "height"),
@@ -430,6 +580,28 @@ _NOT_POSSIBLE: tuple[dict[str, Any], ...] = (
         "backends": ("altium",),
         "why": "Writing the designator on a PCB component crashes Altium.",
         "do_instead": ["proj_annotate"],
+    },
+    {
+        "capability": "Create a matched length rule from a script",
+        "backends": ("altium",),
+        "why": ("No matched-length rule kind or interface is proven on AD26 (none is used by "
+                "any working script), and an undeclared identifier halts the bridge where "
+                "Try cannot catch it."),
+        "do_instead": ["analyze_si_pair_skew", "pcb_read_net_statistics", "pcb_create_net_class"],
+    },
+    {
+        "capability": "Create a max via count or routing topology rule from a script",
+        "backends": ("altium",),
+        "why": ("Same as matched length: no proven rule kind. Count vias per net from "
+                "pcb_read_net_statistics and enforce the limit in the routing plan."),
+        "do_instead": ["pcb_read_net_statistics"],
+    },
+    {
+        "capability": "Change a design rule priority from a script",
+        "backends": ("altium",),
+        "why": ("IPCB_Rule.Priority is a read-only method; assigning it crashes the engine. "
+                "A new rule lands last in its kind."),
+        "do_instead": ["pcb_delete_design_rule", "pcb_create_design_rule"],
     },
     {
         "capability": "Apply an ECO without a human click",

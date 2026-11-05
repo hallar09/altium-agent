@@ -22,7 +22,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 from altium_agent.tools import DEFAULT_TOOLSET, register_backend
-from altium_agent.tools.registry import MINIMAL_TOOLS, ToolRegistry
+from altium_agent.tools.registry import CORE_TOOLS, MINIMAL_TOOLS, ToolRegistry
 
 
 def _unwrap(result):
@@ -121,16 +121,18 @@ async def test_minimal_hides_nothing_it_cannot_reach(full_server,
         f"unreachable in minimal mode: {sorted(advertised - reachable)}")
 
 
-def test_unknown_toolset_falls_back_to_full_not_empty():
+def test_unknown_toolset_falls_back_to_the_default_not_empty():
     """A typo in the env must never leave the server with no tools."""
     registry = ToolRegistry()
     register_backend(registry, "altium", "nonsense-value")
-    assert len(registry) > 100
+    assert set(registry.names) == set(CORE_TOOLS)
 
 
-def test_default_toolset_is_full():
-    """Existing installs must be unaffected by the new option."""
-    assert DEFAULT_TOOLSET == "full"
+def test_default_toolset_is_core():
+    """The full surface is ~150k tokens of schemas; a client that loads
+    them all pays that every turn. Core keeps the rest one tool_invoke
+    away, and "full" is still there to ask for."""
+    assert DEFAULT_TOOLSET == "core"
 
 
 @pytest.mark.anyio
@@ -160,7 +162,9 @@ async def test_catalog_exposes_parameters_so_invoke_need_not_guess(
         assert spelling in entry["parameters"], (
             f"{spelling} is accepted but the catalog does not list it, so "
             f"a client reading the schema cannot discover it")
-        assert entry["parameters"][spelling]["type"] == "number"
+        param = entry["parameters"][spelling]
+        types = {param.get("type")} | {a.get("type") for a in param.get("anyOf", [])}
+        assert "number" in types
     assert "copper_oz" in entry["parameters"]
 
     # Either discovered spelling must actually work when invoked, and

@@ -11,7 +11,6 @@ what was changed. The sources were read, never edited.
 | altium-mcp-pro (altium-mcp-pro contributors) | `%USERPROFILE%\Downloads\kicad-mcp-pro-main\altium-mcp-pro` | 0.2.0 | MIT; its `engines/` adapted from kicad-mcp-pro (Osman Aslan, MIT) | phase (b): offline file readers, analysis engines, DFM and their offline tools |
 | Brass | `%USERPROFILE%\Downloads\brass` | (unversioned) | Apache-2.0, with NOTICE; parts derived from copperhead (Chouhan Industries, Apache-2.0) | phase (c): placement, reference checks. Nothing copied yet |
 | BoardKit | `%USERPROFILE%\Documents\BoardKit` | (unversioned) | **no licence file** | lessons only (see below) |
-| Freerouting | installed by the user | any | GPL-3.0 | an external process only, never vendored or linked |
 
 ## eda-agent (Apache-2.0)
 
@@ -48,8 +47,7 @@ Changed:
   `ReadBackRuleEnabled` added and used by `PCB_SetRulesEnabled` and
   `PCB_SetRuleProperties`.
 - **Linter** extended with the hardening rules (`scripts/altium/lint_hardening.py`).
-- **Doctor**: single-instance check, read-only canary, self-heal and
-  Freerouting checks.
+- **Doctor**: single-instance check, read-only canary and self-heal checks.
 
 ## Written for Altium Agent
 
@@ -100,8 +98,7 @@ licence and headers):
 
 | altium-mcp-pro | Altium Agent | Changes |
 |---|---|---|
-| `formats/specctra.py` | `routing/specctra.py` | imports; the fixed net class is `AGENT_FIXED`; the DSN names Altium Agent as host |
-| `tools/routing.py` (`find_freerouting`, `_run_freerouting`) | `routing/freerouting.py` | environment variables renamed; also looks in `%USERPROFILE%\Altium Agent\freerouting`; the jar is preferred to the native build (which crashes on keep-outs); the Java a jar needs is read from its main class and checked; analytics off; the log goes to a file |
+| `formats/specctra.py` | `routing/specctra.py` | reduced to the SES side: the rule reading (widths, clearance, the via), Altium layer names and the SES parser; the DSN export, and the Freerouting runner that used it, were removed |
 | `tools/routing.py` (`_apply_ses`) | `routing/ses_import.py` | a pure function making eda-agent bridge rows (`pcb.place_tracks`, `pcb.place_vias`) in absolute mils with canonical layer tokens; no bridge calls |
 
 Not copied (later phases or not wanted): `analysis/` astar, hop, negotiate,
@@ -137,13 +134,3 @@ Altium Agent's dispatcher conventions.
 Written for Altium Agent, not from Brass: `placement/check.py`,
 `placement/service.py`, `reference/profile.py`, `reference/compare.py`,
 `tools/house_style.py` and `tests/test_placement_house_style.py`.
-
-## Freerouting (GPL-3.0)
-
-Never copied, bundled, imported or linked. A Freerouting the user installed
-(a jar, or a native build) is run as a separate process with a DSN file in and
-an SES file out (`ALTIUM_AGENT_FREEROUTING` or `ALTIUM_AGENT_FREEROUTING_JAR`,
-`ALTIUM_AGENT_JAVA`, or an installation under `%USERPROFILE%\Altium Agent\freerouting`
-or `%USERPROFILE%\.altium-mcp\freerouting`), which keeps the GPL out of this
-code base. The test suite runs it only when `ALTIUM_AGENT_FREEROUTING` points at
-one.

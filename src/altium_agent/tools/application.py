@@ -263,8 +263,8 @@ def register_meta_tools(mcp):
         name without ever loading its schema. ``arguments`` is the tool's
         keyword-argument dict.
 
-        GET THE ARGUMENT NAMES FIRST. Under the minimal toolset no schema
-        is loaded up front, so call
+        GET THE ARGUMENT NAMES FIRST. A tool outside the advertised set
+        has no schema loaded up front, so call
         ``tool_catalog(query="<name>", with_schema=True)`` and use the
         ``parameters``/``required`` it returns. Guessing is a real failure
         mode: several tools take names that look obvious but are not
@@ -272,9 +272,8 @@ def register_meta_tools(mcp):
         between backends.
 
         Returns the tool's own result (JSON-decoded), or ``{"error": ...}``
-        for an unknown/disallowed name. Note: bypassing the schema means
-        argument mistakes surface as the target tool's own error, not a
-        pre-validation message.
+        for an unknown/disallowed name or arguments that fail the tool's
+        schema (the error names the parameter, before the tool runs).
         """
         import json as _json
 
@@ -288,7 +287,8 @@ def register_meta_tools(mcp):
         try:
             result = await mcp.call_tool(name, arguments or {})
         except Exception as e:  # noqa: BLE001 - surface as data, not a crash
-            return {"error": f"{name} failed: {e}", "tool": name}
+            detail = str(e).removeprefix(f"Error executing tool {name}: ")
+            return {"error": f"{name} failed: {detail}", "tool": name}
         # FastMCP returns a list of content items; unwrap the tool's dict.
         content = result[0] if isinstance(result, tuple) else result
         if isinstance(content, list) and content and hasattr(content[0], "text"):

@@ -36,6 +36,30 @@ board. Items marked **open** are not handled yet.
 | Altium's blank-board `MinimumSolderMaskSliver` (0.254 mm) ignores "disabled". | Same: delete and recreate at the fab's real dam width. |
 | Via tenting by script is ignored while the via's `SolderMaskExpansionMode` follows the rule. | Linter rule `tenting-needs-manual-mask` (error): set `eMaskExpansionMode_Manual` before `IsTenting_Top/Bottom`. The read-back of tenting arrives with the phase (d) via tools. |
 | Altium's batch DRC stops at 500 violations, and on a dense board silk and mask noise fills all 500 and hides copper problems. | `analyze_drc_report` flags a report at the limit as incomplete, lists copper problems in full with mm locations, counts the noise, and names the rules to delete while routing. |
+| A blank board's rules scoped to All (Width 10 mil, RoutingVias 50/28 mil, DiffPairsRouting 10-15 mil, MinimumSolderMaskSliver 10 mil, SolderMaskExpansion 4 mil) stay the fallback for every net the class rules miss, and agents left them alone on every board (SODIMM, MiniPC, MacroStick). | `pcb_audit_rules` reads the saved rules against the design's limits and returns each default that fights them, pair rules whose width was never set, same-scope rules that never apply and sign-off rules left off, each with the exact fixing call. The board-setup skill runs it before placement and at sign-off. |
+| A pair rule's width could not be set: `pcb_create_design_rule` wrote only gap and uncoupled length, `pcb_set_rule_properties` updated 0 properties on kind 51, so every pair routed at Altium's 15 mil. | `pcb_create_design_rule(rule_type="differential_pairs", values_mm={min_width, pref_width, max_width, ...})` writes the widths on every layer; `pcb_set_rule_properties(dp_*_width_mm, dp_*_gap_mm, dp_max_uncoupled_mm)` edits an existing pair rule and reads each value back (`diff_pair_written`). The offline reader now returns pair widths (`dp_*_width_mm`), via sizes and uncoupled length. **Live-unverified** (the properties are the ones PcbAutomation.pas wrote on AD26). |
+| No scoped Routing Via, polygon-connect, plane-connect, plane-clearance, annular-ring or sliver rule could be created, and no rule had a second scope. | New `rule_type`s `routing_via`, `polygon_connect`, `plane_connect`, `plane_clearance`, `annular_ring`, `solder_mask_sliver`, and `scope2`, with the identifiers the Kame FMU automation logged OK on AD26. Each reply carries Altium's `descriptor`. **Live-unverified** through this bridge. |
+| Matched-length, max-via-count and routing-topology rules cannot be created by script; rule priority cannot be written. | **Open** (no proven rule kind; Priority is a read-only method). `tool_guide` lists them as not possible with what to do instead: measure lengths and via counts, and delete/recreate to reorder. |
+| `obj_query` on `eRuleObject` returns a blank Name, so a rule cannot be targeted through it. | `tool_guide` sends rule work to `pcb_get_design_rules` / `pcb_get_rule_properties` / `pcb_set_rule_properties`, which match by name. |
+| Width rules took whole mils only, so 0.1 mm became 4 mil. | `values_mm` on create and `min_width_mm` / `max_width_mm` / `favored_width_mm` on `pcb_set_rule_properties`. |
+
+## Stack-up
+
+| Issue | Handled by |
+|---|---|
+| `pcb_read_stackup` read dielectric types one off (DIELTYPE 0 as core, 1 as prepreg, 2 as surface). Altium writes core 1, prepreg 2, surface 3 (Kame_FMU, saved by Altium). `pcb_modify_layer` was right; agents "corrected" it into wrong stacks (SODIMM_Build: prepregs saved as core, cores as none). | Fixed in `offline/files/pcbdoc.py` (`DIELTYPE_NAMES`). Boards set up with the workaround need their dielectric types set again. |
+| `pcb_add_layer` puts every signal layer above every plane; layer names and fractional thicknesses did not stick; a stack took dozens of calls. | `pcb_import_layer_stack(pcb_path, layers, dry_run)` builds Altium's stack text from the saved board and imports it with `MasterLayerStack.Import_FromParameters` (the Kame FMU automation's call on AD26). Inner copper is signal copper; planes are pours. **Live-unverified** through this bridge. |
+| `pcb_modify_layer` took whole mils, so 0.6 mil copper became 1 mil. | Fractional mils and `copper_thickness_mm` / `dielectric_height_mm`. |
+| `analyze_si_generate_stackup` only does 2, 4 or 6 layers. | **Open**; build larger stacks by hand with `analyze_si_impedance` per layer, then `pcb_import_layer_stack`. |
+
+## Vias and DRC
+
+| Issue | Handled by |
+|---|---|
+| No tool made a via type (drill pair); blind vias failed the LayerPairs rule and the drill output. | `pcb_add_drill_pair` (places and deletes a parked via; Altium keeps the pair) and `pcb_get_drill_pairs` (from the saved file). Live-tested on SODIMM_Build. |
+| The route session and SES import modelled through vias only: a via drawn L1->L3 was checked as copper on every layer and imported Top to Bottom. | `route_session_draw(via_span="span")` (or `via_low_layer`/`via_high_layer` on a point) keeps a blind or buried via's span; the session's connectivity and DRC count it only on the layers it passes; the SES gives it a padstack with copper on those layers only, and `route_import_ses` places it with its low and high layer. The reply names spans with no drill pair. The engine (`route_session_route`, fan-out) still places through vias. **Live-unverified** in Altium (the bulk via placement with per-via layers is the inherited path). |
+| `pcb_run_drc` leaves the HTML report focused; the next run silently re-reads the old report. | `pcb_run_drc(board_path=...)` focuses the board first. |
+| `pcb_set_plane_net` does not set the net of AD26's split-plane objects. | **Open** (see GAPS.md). Use signal layers with pours, which `pcb_import_layer_stack` produces. |
 
 ## Arguments
 
@@ -80,28 +104,15 @@ board. Items marked **open** are not handled yet.
 
 | Issue | Handled by |
 |---|---|
-| Freerouting ignores intent: crystals, clocks, pairs. | The broker routes pairs, clock and crystal nets and short local nets with the in-house engine before Freerouting sees the bulk, as fixed copper. |
-| Antenna keep-outs. | DSN export carries the board's keep-out regions and Keep-Out layer. **Open**: a `place_plan` antenna keep-out is honoured only once drawn on the board as a keep-out region. |
-| Autoroute before pouring (pours become obstacles). | Pours are exported as planes of their net, poured nets are left to the pours, and every route step is followed by `pcb_repour_polygons`. |
-| Freerouting times out on big boards. | `route_freerouting` runs it as a job (`route_freerouting_status`), with its own timeout, and `route_import_ses` applies the result. |
-| Freerouting's `java` is not on PATH; 2.x needs Java 25. | `routing/freerouting.py` uses `ALTIUM_AGENT_JAVA`, a `jre` beside the jar, then PATH, and reads the Java a jar needs from its main class; `route_engines` reports a mismatch instead of a class-version crash. |
-| Freerouting 2.5's native CLI crashes (`UnsupportedFeatureError` for `ObstacleArea`) on boards with keep-outs. | The jar is preferred when both are installed. |
-| Freerouting sends usage analytics by default. | Every run passes `--usage_and_diagnostic_data.disable_analytics=true`. |
-| Fan-out vias ignore parts on the other side and pair corridors. | Batches run with Freerouting's fan-out off and pairs already routed. **Open** for a whole-board run. |
+| Antenna keep-outs. | Keep-out regions and the Keep-Out layer are obstacles to the fan-out and the routing session. **Open**: a `place_plan` antenna keep-out is honoured only once drawn on the board as a keep-out region. |
+| Route before pouring (pours become obstacles). | Poured nets are left to their pours, each of their pads gets a via to its plane (`route_power_fanout`), and the routing is followed by `pcb_repour_polygons`. |
+| Fan-out vias ignore parts on the other side and pair corridors. | `route_power_fanout` keeps the board's clearance to every other net's copper on every layer (a via goes through them all), and runs after the pairs and critical nets. |
 | Situs gives up after its first pass has boxed pins in. | Situs is the broker's finisher, not its first pass: `route_situs` (every part selected, Connections On Selected Components: no dialog, the board's own strategy, locked copper untouched) after the bulk, polled until the copper stops changing. Live-unverified (A17). |
-| A reference-placed re-layout stalls in the autorouters (Kame_FMU_v2: Situs 79%, Freerouting worse each pass). | `route_refcopy` copies the big part's escape and any clashing net whole from the reference, locked, when every part is where the reference has it; `route_converge` does it per round with a reference plan. Arcs are copied as short segments. Live-unverified (A18). |
-| Pours left in place box the autorouter in (Situs 54% vs 74%+ shelved on Kame). | **Open**: no shelve/restore tool yet (docs/GAPS.md). Freerouting takes pours as planes and does not need it. |
+| A reference-placed re-layout stalls in the autorouters (Kame_FMU_v2: Situs 79%). | `route_refcopy` copies the big part's escape and any clashing net whole from the reference, locked, when every part is where the reference has it; `route_converge` does it per round with a reference plan. Arcs are copied as short segments. Live-unverified (A18). |
+| Pours left in place box the autorouter in (Situs 54% vs 74%+ shelved on Kame). | **Open** for Situs: no shelve/restore tool yet (docs/GAPS.md). A routing session routes before pours are poured and does not need it. |
 | Diff pairs must be routed as pairs first. | First step of every plan (in-house engine, `diff_pairs`). |
-| A re-layout must not silently remove hand routing. | Routed nets are locked first (`pcb_lock_net_routing`), exported as fixed wiring, never ripped by `route_converge` (only `include_locked=false` unroutes of the plan's own nets), and SES copper that matches existing copper is not written twice. |
+| A re-layout must not silently remove hand routing. | Routed nets are locked first (`pcb_lock_net_routing`), kept as fixed copper, never ripped by `route_converge` (only `include_locked=false` unroutes of the plan's own nets), and SES copper that matches existing copper is not written twice. |
 | Via tenting. | `pcb.set_via_tenting` sets manual mask mode, then tenting, and reads it back; `route_set_via_tenting` also confirms it from the saved file (tent flags 0x20/0x40 of the via record). **Live-unverified** (A15): the mask-mode write is the kind of via write that once crashed AD26's scripting engine. |
-
-Measured on Kame_FMU (offline, Freerouting 2.5.0 jar on Java 25): with three
-nets' copper taken up and everything else fixed, Freerouting put back 10 of
-11 connections in 106 s (one FMU_VBAT connection left). With all of Kame's
-routing taken up (pours kept as planes), one Freerouting run on two cores left
-16 of 424 items unconnected after 18 passes and 13 minutes: the bulk tier
-works, and a dense six-layer board still needs the in-house tiers,
-`route_converge` and a person for the last connections.
 
 ## Debt carried from eda-agent
 

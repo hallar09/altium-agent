@@ -80,8 +80,28 @@ def edge_gaps(fps: list[Footprint], poly: list[tuple[float, float]]) -> list[tup
     return out
 
 
+#: Supply spellings the placer's power-net pattern leaves out ("3.3V", "P3V3", "AVDD_1V8", "V_USB").
+_SUPPLY_EXTRA = re.compile(r"^(?:P|V_?)?\+?\d+(?:\.\d+)?V(?:\d+)?(?:_|$)|VDD|VCC|VIN|VBAT|VBUS|VREG|PWR|^V_",
+                           re.IGNORECASE)
+
+
+def is_supply(net: str, pins: int) -> bool:
+    """A net a decoupling cap decouples: named like a rail, or big enough to be one."""
+    return is_supply_net(net, pins) or bool(_SUPPLY_EXTRA.search(net))
+
+
 def decoupling(fps: list[Footprint]) -> list[dict]:
-    """Each decoupling cap (2 pins: a supply and ground) and the nearest IC pin on its supply."""
+    """Each decoupling cap (2 pins: a supply and ground) and the nearest IC pin on its supply.
+
+    Only caps on a supply count. A cap from a crystal, reset or RF net to
+    ground is a load or filter cap: its place is set by what it loads, and
+    counting it here flagged it as a decap far from its IC.
+    """
+    pins_on: dict[str, int] = {}
+    for f in fps:
+        for p in f.pins:
+            if p.net:
+                pins_on[p.net] = pins_on.get(p.net, 0) + 1
     ic_pins: dict[str, list[tuple[str, float, float, str]]] = {}
     for f in fps:
         if not _is_ic(f):
@@ -100,6 +120,8 @@ def decoupling(fps: list[Footprint]) -> list[dict]:
         elif is_ground(b.net or "") and a.net and not is_ground(a.net):
             sp = a
         else:
+            continue
+        if not is_supply(sp.net, pins_on.get(sp.net, 0)):
             continue
         cands = ic_pins.get(sp.net)
         if not cands:

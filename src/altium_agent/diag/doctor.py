@@ -197,34 +197,6 @@ def _check_self_heal() -> list[Check]:
     return out
 
 
-def _check_freerouting() -> list[Check]:
-    """Freerouting is optional and external (GPL, never vendored).
-
-    The same lookup the routing broker uses (routing/freerouting.py), so the
-    doctor and route_engines never disagree about which one would run.
-    """
-    from altium_agent.routing.freerouting import find, search_dirs
-
-    f = find()
-    if f is None:
-        return [Check(
-            name="freerouting",
-            status=Status.WARN,
-            message="not installed",
-            fix=("Optional. Install Freerouting yourself (GPL-3.0, not shipped) and set "
-                 "ALTIUM_AGENT_FREEROUTING to its jar or native build, or put it under "
-                 + " or ".join(str(x) for x in search_dirs()) + "."),
-            severity=Severity.MINOR)]
-    detail = f.path + (f" (Java {f.java_major} at {f.java})" if f.kind == "jar" else " (native)")
-    return [Check(
-        name="freerouting",
-        status=Status.PASS if f.usable else Status.WARN,
-        message=detail if f.usable else "; ".join(f.problems),
-        fix=("Optional. Set ALTIUM_AGENT_JAVA to a Java "
-             f"{f.needs_java or ''} runtime (it need not be on PATH)." if not f.usable else ""),
-        severity=Severity.MINOR)]
-
-
 def _check_lib_paths(library_paths: Sequence[str]) -> list[Check]:
     """Check each user-supplied SchLib path. No hardcoded paths."""
     if not library_paths:
@@ -325,6 +297,5 @@ def run_doctor_checks(library_paths: Sequence[str] | None = None) -> list[Check]
 
     checks.append(_check_readonly_canary())
     checks.extend(_check_self_heal())
-    checks.extend(_check_freerouting())
     checks.extend(_check_lib_paths(library_paths or []))
     return checks

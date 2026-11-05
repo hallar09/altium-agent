@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Phase (d): the routing broker, Specctra round trip, Freerouting runner,
-convergence and via styles.
+"""Phase (d): the routing broker, the SES import, convergence and via styles.
 
-Everything here runs offline. A real Freerouting run happens only when
-ALTIUM_AGENT_FREEROUTING points at an installation (it is never shipped).
+Everything here runs offline.
 """
 
 from __future__ import annotations
@@ -12,17 +10,14 @@ import asyncio
 import copy
 import json
 import os
-import zipfile
 from pathlib import Path
 
 import pytest
 
 from altium_agent.offline.files.pcbdoc import NONE16, read_pcbdoc
-from altium_agent.routing import freerouting as fr
 from altium_agent.routing.broker import classify, pair_nets, plan
 from altium_agent.routing.converge import converge
 from altium_agent.routing.ses_import import layer_token, ses_rows
-from altium_agent.routing.specctra import DsnOptions, export_dsn
 from altium_agent.routing.via_style import check as via_check
 from altium_agent.routing.via_style import read_back
 from altium_agent.units import MILS_PER_MM
@@ -98,80 +93,30 @@ def test_layer_tokens():
     assert [layer_token(i) for i in (1, 2, 5, 32)] == ["TopLayer", "MidLayer1", "MidLayer4", "BottomLayer"]
 
 
-# ---------------------------------------------------------------- Freerouting discovery
-
-def _fake_jar(path: Path, class_major: int):
-    with zipfile.ZipFile(path, "w") as z:
-        z.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\nMain-Class: app.freerouting.Freerouting\n")
-        z.writestr("app/freerouting/Freerouting.class", b"\xca\xfe\xba\xbe\x00\x00" + class_major.to_bytes(2, "big"))
-
-
-def test_jar_java_version_is_checked(tmp_path, monkeypatch):
-    jar = tmp_path / "freerouting-9.9.jar"
-    _fake_jar(jar, 69)
-    assert fr.jar_java_needed(jar) == 25
-    java = tmp_path / "java"
-    java.write_text("#!/bin/sh\necho 'openjdk version \"21.0.2\" 2024-01-16' 1>&2\n")
-    java.chmod(0o755)
-    monkeypatch.setenv("ALTIUM_AGENT_FREEROUTING", str(jar))
-    monkeypatch.setenv("ALTIUM_AGENT_JAVA", str(java))
-    f = fr.find()
-    assert f.kind == "jar" and f.java_major == 21 and not f.usable
-    assert "needs Java 25" in f.problems[0]
-    with pytest.raises(fr.FreeroutingError):
-        fr.run(tmp_path / "a.dsn", tmp_path / "a.ses", fr=f)
-
-
-def test_not_installed_says_so(tmp_path, monkeypatch):
-    monkeypatch.delenv("ALTIUM_AGENT_FREEROUTING", raising=False)
-    monkeypatch.delenv("ALTIUM_AGENT_FREEROUTING_JAR", raising=False)
-    monkeypatch.setattr(fr, "search_dirs", lambda: [tmp_path / "none"])
-    monkeypatch.setattr(fr.shutil, "which", lambda name: None)
-    assert fr.find() is None
-    with pytest.raises(fr.FreeroutingError) as e:
-        fr.run(tmp_path / "a.dsn", tmp_path / "a.ses")
-    assert "not shipped" in e.value.hint
-
-
-def test_run_flags_keep_it_headless_and_private(tmp_path):
-    script = tmp_path / "freerouting"
-    script.write_text("#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/args\"\n"
-                      "while [ $# -gt 0 ]; do if [ \"$1\" = -do ]; then echo '(session x)' > \"$2\"; fi; shift; done\n")
-    script.chmod(0o755)
-    f = fr.Freerouting([str(script)], "native", str(script))
-    r = fr.run(tmp_path / "a.dsn", tmp_path / "a.ses", fr=f, max_passes=7)
-    args = (tmp_path / "args").read_text()
-    for flag in ("--gui.enabled=false", "--usage_and_diagnostic_data.disable_analytics=true",
-                 "--router.automatic_neckdown=false", "--router.optimizer.enabled=false", "-mp 7"):
-        assert flag in args
-    assert Path(r["ses"]).is_file()
-
-
-# ---------------------------------------------------------------- broker
-
 @needs_kame
 def test_kame_fully_routed_needs_nothing():
-    p = plan(read_pcbdoc(Path(KAME_PCB)), freerouting_ready=True)
+    p = plan(read_pcbdoc(Path(KAME_PCB)))
     assert p["steps"] == [] and "Nothing to route" in p["notes"][0]
 
 
 @needs_kame
 def test_kame_stripped_plan_tiers_and_protection():
     doc = _stripped(read_pcbdoc(Path(KAME_PCB)), keep={"FMU_VBAT"})
-    p = plan(doc, freerouting_ready=True, batch_size=40)
+    p = plan(doc)
     assert p["pairs"] == [{"name": "USB", "positive": "USB_P", "negative": "USB_N"}]
     assert p["protected"]["partial"] == ["FMU_VBAT"]
     assert set(p["tiers"]["poured"]) >= {"GND"}
     tools = [s["tool"] for s in p["steps"]]
     assert tools[:3] == ["app_checkpoint", "pcb_lock_net_routing", "pcb_autoroute"]
     assert p["steps"][2]["args"]["nets"] == ["USB_N", "USB_P"] and p["steps"][2]["args"]["diff_pairs"]
-    assert "route_freerouting" in tools and tools[-3:] == ["pcb_repour_polygons", "pcb_run_drc", "route_converge"]
-    fr_steps = [s for s in p["steps"] if s["tool"] == "route_freerouting"]
-    assert all(len(s["args"]["route_only"]) <= 40 for s in fr_steps)
+    # power and ground fanned out to their planes before the bulk, stitched after it
+    fan = tools.index("route_power_fanout")
+    bulk = next(i for i, s in enumerate(p["steps"]) if s.get("tier") == "bulk")
+    stitch = next(i for i, s in enumerate(p["steps"]) if s.get("tier") == "stitch")
+    assert fan < bulk < stitch
+    assert tools[-3:] == ["pcb_repour_polygons", "pcb_run_drc", "route_converge"]
     routed = set(p["routed_by_plan"])
     assert "GND" not in routed and routed.isdisjoint(p["tiers"]["poured"])
-    p2 = plan(doc, freerouting_ready=False)
-    assert "route_freerouting" not in [s["tool"] for s in p2["steps"]]
 
 
 @needs_wifi
@@ -196,13 +141,13 @@ def _v(n1, n2):
             "primitive2": {"type": "Track", "net": n2, "x_mils": 3, "y_mils": 4}}
 
 
-PLAN = {"source": "C:/b.PcbDoc", "freerouting": True, "routed_by_plan": ["A", "B", "C"],
+PLAN = {"source": "C:/b.PcbDoc", "routed_by_plan": ["A", "B", "C"],
         "protected": {"routed": ["H"], "partial": ["C"]},
-        "steps": [{"engine": "freerouting", "args": {"route_only": ["A", "B"]}},
+        "steps": [{"engine": "inhouse", "args": {"nets": ["A", "B"]}},
                   {"engine": "inhouse", "args": {"nets": ["C"]}}]}
 
 
-def test_converge_never_rips_protected_and_switches_engine(tmp_path):
+def test_converge_never_rips_protected_and_reroutes_in_house(tmp_path):
     path = tmp_path / "p.json"
     path.write_text(json.dumps(PLAN))
     r = converge(PLAN, {"violations": [_v("A", "H"), _v("A", "B"), _v("C", "H"), _v("H", "X")]}, plan_path=path)
@@ -211,7 +156,7 @@ def test_converge_never_rips_protected_and_switches_engine(tmp_path):
     assert "H" not in unroute["args"]["nets"]
     assert any("only copper this plan did not route" in e for e in r["escalations"])
     eng = {s["engine"]: (s["args"].get("nets") or s["args"].get("route_only")) for s in r["steps"] if s.get("engine")}
-    assert "A" in eng.get("inhouse", []) and "C" in eng.get("freerouting", [])
+    assert set(eng) == {"inhouse"} and {"A", "C"} <= set(eng["inhouse"])
 
 
 def test_converge_bounds_rounds_and_repeat_rips(tmp_path):
@@ -284,7 +229,7 @@ def test_tenting_and_import_refuse_samples_and_the_wrong_board(tmp_path, monkeyp
     assert "focused board" in r["refused"] and "pcb.set_via_tenting" not in br.sent
     r = asyncio.run(t.get("route_import_ses").fn(job_id="job-x", expect_file=sample))
     assert "sample or installed" in r["refused"]
-    r = asyncio.run(t.get("route_freerouting").fn(expect_file=sample))
+    r = asyncio.run(t.get("route_power_fanout").fn(expect_file=sample))
     assert "sample or installed" in r["refused"]
 
 
@@ -306,66 +251,21 @@ def test_tenting_dry_run_sends_dry_run(monkeypatch):
     assert float(sent["pcb.set_via_tenting"]["diameter_mils"]) == pytest.approx(0.4 * MILS_PER_MM, abs=1e-3)
 
 
-# ---------------------------------------------------------------- DSN and a real Freerouting run
-
 @needs_kame
-def test_dsn_route_only_puts_the_rest_in_the_fixed_class():
-    doc = read_pcbdoc(Path(KAME_PCB))
-    e = export_dsn(doc, DsnOptions(route_only=["USB_P", "USB_N"]))
-    assert "(class AGENT_FIXED" in e.text and '(host_cad "Altium Agent")' in e.text
-
-
-REAL_FR = fr.find() if os.environ.get("ALTIUM_AGENT_FREEROUTING") else None
-
-
-@needs_kame
-@pytest.mark.skipif(not (REAL_FR and REAL_FR.usable), reason="no usable Freerouting (set ALTIUM_AGENT_FREEROUTING)")
-def test_real_freerouting_batch_on_kame(tmp_path):
-    """Take up a handful of Kame's nets and let Freerouting put them back."""
-    nets = ["UART7_TX_MB", "UART7_RX_MB", "SPWR_ON"]
-    doc = copy.deepcopy(read_pcbdoc(Path(KAME_PCB)))
-    gone = {i for i, n in enumerate(doc.nets) if n in nets}
-    doc.tracks = [t for t in doc.tracks if t.net not in gone or t.component != NONE16]
-    doc.arcs = [a for a in doc.arcs if a.net not in gone or a.component != NONE16]
-    doc.vias = [v for v in doc.vias if v.net not in gone or v.component != NONE16]
-    e = export_dsn(doc, DsnOptions(route_only=nets))
-    dsn, ses = tmp_path / "k.dsn", tmp_path / "k.ses"
-    dsn.write_text(e.text)
-    fr.run(dsn, ses, max_passes=10, timeout_s=900,
-           extra=("--router.fanout.enabled=false", "--router.autorouter.ignore_net_classes=AGENT_FIXED"))
-    rows = ses_rows(ses, e.layer_map, e.rules, doc.origin_mil, existing=doc, only_nets=set(nets))
-    assert rows.tracks and rows.nets <= set(nets)
-
-
-# ---------------------------------------------------------------- Situs and the project policy
-
-@needs_kame
-def test_plan_finishes_with_situs_and_policy_can_forbid_freerouting(tmp_path, monkeypatch):
-    from altium_agent.routing import service as rsvc
-
+def test_plan_finishes_with_situs():
     doc = _stripped(read_pcbdoc(Path(KAME_PCB)))
-    p = plan(doc, freerouting_ready=True)
-    tools = [s["tool"] for s in p["steps"]]
+    tools = [s["tool"] for s in plan(doc)["steps"]]
     assert tools.index("route_situs") == tools.index("pcb_repour_polygons") - 1
-    assert "route_situs" not in [s["tool"] for s in plan(doc, engines=["inhouse"], freerouting_ready=True)["steps"]]
-    (tmp_path / "altium_agent.json").write_text('{"routing": {"third_party_engines": false}}')
-    pol = rsvc.project_policy(tmp_path)
-    assert pol["third_party_engines"] is False and pol["source"].endswith("altium_agent.json")
-    assert rsvc.project_policy(tmp_path / "none")["third_party_engines"] is True
-    (tmp_path / "altium_agent.json").write_text("{nope")
-    from altium_agent.offline.errors import InvalidArgument
-
-    with pytest.raises(InvalidArgument):
-        rsvc.project_policy(tmp_path)
+    assert "route_situs" not in [s["tool"] for s in plan(doc, engines=["inhouse"])["steps"]]
 
 
-def test_freerouting_refused_by_project_policy(tmp_path, monkeypatch):
-    import altium_agent.bridge as bridge_mod
+def test_no_external_router_is_left():
+    """Freerouting was taken out; nothing may still offer or run it."""
+    import importlib.util
 
-    (tmp_path / "altium_agent.json").write_text('{"routing": {"third_party_engines": false}}')
-    monkeypatch.setattr(bridge_mod, "get_bridge", lambda: (_ for _ in ()).throw(AssertionError("no bridge")))
-    r = asyncio.run(_tools().get("route_freerouting").fn(expect_file=str(tmp_path / "b.PcbDoc")))
-    assert "forbids third-party" in r["refused"]
+    assert importlib.util.find_spec("altium_agent.routing.freerouting") is None
+    names = _tools().names
+    assert not [n for n in names if "freerouting" in n or n == "route_export_dsn"]
 
 
 def test_route_situs_polls_until_the_copper_settles(monkeypatch):
@@ -438,7 +338,7 @@ def test_refcopy_refuses_moved_parts_and_copies_an_escape():
 @needs_kame
 def test_broker_sees_reference_placement_and_seeds_the_escape(tmp_path):
     ref = read_pcbdoc(Path(KAME_PCB))
-    p = plan(_stripped(ref), freerouting_ready=True, reference=ref)
+    p = plan(_stripped(ref), reference=ref)
     assert p["reference_placement"] is True
     esc = next(s for s in p["steps"] if s["tool"] == "route_refcopy")
     assert esc["args"]["escape"] == "U12"

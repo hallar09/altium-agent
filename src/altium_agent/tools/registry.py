@@ -28,9 +28,11 @@ Neither function needs to know which mode it is running in.
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
+
+from mcp.server.fastmcp.tools import Tool
+from mcp.types import ToolAnnotations
 
 __all__ = ["CORE_TOOLS", "MINIMAL_TOOLS", "ToolRegistry", "ToolSpec"]
 
@@ -70,15 +72,30 @@ CORE_TOOLS = MINIMAL_TOOLS + (
     "proj_get_erc_violations", "proj_sync_pcb", "proj_get_nets",
     "sch_render_svg", "obj_query", "obj_modify", "obj_delete",
     # board
-    "pcb_set_board_shape", "pcb_add_layer", "pcb_modify_layer",
-    "pcb_read_stackup", "pcb_create_design_rule", "pcb_read_rules",
+    "pcb_set_board_shape", "pcb_set_board_outline", "pcb_set_sheet_position", "pcb_define_board_shape_from_selection",
+    "pcb_sync_layer_stack_region",
+    "pcb_create_primitives_from_board_shape", "pcb_add_board_cutout", "pcb_add_layer", "pcb_modify_layer",
+    "pcb_read_stackup", "pcb_import_layer_stack", "pcb_create_design_rule", "pcb_read_rules",
+    # rules: fixing Altium's blank-board defaults is most of rule setup
+    "pcb_audit_rules", "pcb_set_rule_properties", "pcb_delete_design_rule",
+    "pcb_set_rules_enabled", "pcb_get_design_rules", "pcb_get_rule_properties",
+    "pcb_place_via", "pcb_place_vias", "pcb_focus_board",
     "pcb_create_diff_pair", "pcb_get_diff_pair_rules",
-    "pcb_place_stitching_vias", "pcb_repour_polygons", "pcb_run_drc",
+    "pcb_place_stitching_vias", "pcb_add_drill_pair", "pcb_get_drill_pairs", "pcb_repour_polygons", "pcb_run_drc",
     "pcb_read_ratsnest", "pcb_get_unrouted_nets", "pcb_render_svg",
     "place_plan", "place_check", "place_apply",
-    "route_engines", "route_broker_plan", "route_freerouting",
+    # AI-driven placement and routing: the agent decides, the session checks
+    "place_session_start", "place_session_part", "place_session_move", "place_session_check",
+    "place_session_view", "place_session_undo", "place_session_export",
+    "route_session_start", "route_session_route", "route_session_draw", "route_session_fanout",
+    "route_session_check", "route_session_ripup", "route_session_undo", "route_session_view",
+    "route_session_export",
+    "route_engines", "route_broker_plan",
     "route_import_ses", "route_situs", "route_converge", "route_refcopy",
-    "route_via_style", "route_set_via_tenting",
+    "route_via_style", "route_set_via_tenting", "route_power_fanout",
+    # the routing skill: rules per class, pours and planes for power
+    "pcb_read_summary", "pcb_read_net_statistics", "pcb_get_differential_pairs",
+    "pcb_create_net_class", "pcb_lock_net_routing", "pcb_place_polygon_rect", "pcb_set_plane_net",
     # checks
     "analyze_erc", "analyze_sch_pcb_sync", "analyze_board_review",
     "analyze_review_design",
@@ -89,52 +106,40 @@ CORE_TOOLS = MINIMAL_TOOLS + (
 )
 
 
-def _json_type(annotation: Any) -> str:
-    """Best-effort JSON type name for a Python annotation."""
-    text = str(annotation)
-    if annotation is inspect.Parameter.empty:
-        return "any"
-    for needle, name in (("bool", "boolean"), ("int", "integer"),
-                         ("float", "number"), ("str", "string"),
-                         ("list", "array"), ("dict", "object")):
-        if needle in text:
-            return name
-    return "any"
-
-
 @dataclass
 class ToolSpec:
-    """The subset of a FastMCP tool that the meta-tools actually read."""
+    """One captured tool: FastMCP's own ``Tool`` plus the attribute names
+    the meta-tools read.
 
-    name: str
-    description: str
-    fn: Callable
+    The schema and the argument validation are FastMCP's, built by
+    ``Tool.from_function`` exactly as ``@mcp.tool()`` would, so a tool
+    reached through ``tool_invoke`` gets the same ``list[str]`` /
+    ``dict`` types in ``tool_catalog`` and the same coercion and
+    validation errors as one the client called directly.
+    """
+
+    tool: Tool
+
+    @property
+    def name(self) -> str:
+        return self.tool.name
+
+    @property
+    def description(self) -> str:
+        return self.tool.description or ""
+
+    @property
+    def fn(self) -> Callable:
+        return self.tool.fn
+
+    @property
+    def annotations(self) -> Optional[ToolAnnotations]:
+        return self.tool.annotations
 
     @property
     def inputSchema(self) -> dict[str, Any]:
-        """A JSON-Schema-ish view, matching what FastMCP exposes.
-
-        Same attribute name and shape as ``mcp.types.Tool.inputSchema``
-        so ``tool_catalog`` can read parameters identically whether it is
-        looking at a real MCP tool or a captured one.
-        """
-        props: dict[str, Any] = {}
-        required: list[str] = []
-        try:
-            sig = inspect.signature(self.fn)
-        except (TypeError, ValueError):
-            return {"type": "object", "properties": {}, "required": []}
-        for name, param in sig.parameters.items():
-            if name == "self" or param.kind in (
-                    param.VAR_POSITIONAL, param.VAR_KEYWORD):
-                continue
-            entry: dict[str, Any] = {"type": _json_type(param.annotation)}
-            if param.default is inspect.Parameter.empty:
-                required.append(name)
-            elif isinstance(param.default, (str, int, float, bool)):
-                entry["default"] = param.default
-            props[name] = entry
-        return {"type": "object", "properties": props, "required": required}
+        """Same attribute name and shape as ``mcp.types.Tool.inputSchema``."""
+        return self.tool.parameters
 
 
 class ToolRegistry:
@@ -152,13 +157,10 @@ class ToolRegistry:
 
     # -- registration -------------------------------------------------
     def tool(self, *args: Any, **kwargs: Any):
-        """Stand in for ``@mcp.tool()``."""
+        """Stand in for ``@mcp.tool()``, with the same keyword arguments."""
         def deco(fn: Callable) -> Callable:
-            self._tools[fn.__name__] = ToolSpec(
-                name=fn.__name__,
-                description=inspect.getdoc(fn) or "",
-                fn=fn,
-            )
+            spec = ToolSpec(Tool.from_function(fn, **kwargs))
+            self._tools[spec.name] = spec
             if self._delegate is not None:
                 self._delegate.tool(*args, **kwargs)(fn)
             return fn
@@ -180,19 +182,17 @@ class ToolRegistry:
         return sorted(self._tools.values(), key=lambda t: t.name)
 
     async def call_tool(self, name: str, arguments: Optional[dict] = None):
-        """Invoke a captured tool by name.
+        """Validate the arguments and invoke a captured tool by name.
 
         Returns the tool's own return value. ``tool_invoke`` already
         handles both this shape and FastMCP's content-list shape, so no
-        wrapping is needed here.
+        wrapping is needed here. Bad arguments raise FastMCP's
+        ``ToolError``, naming the parameter, before the tool runs.
         """
         spec = self._tools.get(name)
         if spec is None:
             raise KeyError(f"unknown tool: {name}")
-        result = spec.fn(**(arguments or {}))
-        if inspect.isawaitable(result):
-            result = await result
-        return result
+        return await spec.tool.run(arguments or {})
 
     # -- plain accessors ----------------------------------------------
     @property

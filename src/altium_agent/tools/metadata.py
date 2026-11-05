@@ -3,16 +3,16 @@
 # Modified for Altium Agent (2026): see docs/PROVENANCE.md
 """Out-of-band metadata for the MCP tool surface.
 
-FastMCP (mcp 1.5.x, pinned <2) has no ``tags``/``annotations`` field on its
-tool model, so tool metadata cannot ride on the ``@mcp.tool()`` decorator.
-This module keeps a decorator-independent registry instead, keyed by tool
-name, that other layers consume:
+The badges are kept here, keyed by tool name, rather than on each
+``@mcp.tool()`` decorator, so other layers consume them:
 
 - the future discovery layer (a ``tool_catalog`` meta-tool) filters by
   ``category`` / ``interaction`` so a client need not load 345 schemas;
 - the docs generator groups by ``category`` and badges by ``maturity``;
 - a CI drift test asserts every registered tool resolves here and that no
-  override names a tool that no longer exists.
+  override names a tool that no longer exists;
+- :func:`tool_annotations` turns the interaction badge into the MCP
+  ``readOnlyHint`` / ``destructiveHint`` every advertised tool carries.
 
 Three axes:
 
@@ -136,7 +136,7 @@ _SIMULATOR_TOOLS = frozenset({
     "pcb_get_board_outline", "pcb_get_board_statistics",
     "pcb_get_components", "pcb_get_nets", "pcb_get_unrouted_nets",
     "pcb_get_vias", "pcb_move_components", "pcb_place_components",
-    "pcb_place_tracks", "pcb_place_via", "pcb_run_drc",
+    "pcb_place_tracks", "pcb_place_via", "pcb_run_drc", "pcb_add_drill_pair", "pcb_focus_board",
     "pcb_set_rules_enabled",
     "proj_add_document", "proj_annotate", "proj_compile",
     "proj_create", "proj_cross_probe", "proj_export_bom_html",
@@ -162,10 +162,10 @@ _OFFLINE_BY_NAME = frozenset({
     # Altium Agent phase (c): files in, JSON out (place_apply is live).
     "ref_profile", "ref_compare", "place_plan", "place_check",
     # Altium Agent phase (d): the broker's file side (the live ones are
-    # route_freerouting, route_import_ses and
-    # route_set_via_tenting).
-    "route_engines", "route_broker_plan", "route_export_dsn", "route_converge", "route_via_style",
-    "route_freerouting_status",
+    # route_import_ses and route_set_via_tenting).
+    "route_engines", "route_broker_plan", "route_converge", "route_via_style", "route_power_fanout",
+    # AI-driven sessions: the saved board and a session file (interactive/).
+    "place_session_start", "place_session_part", "place_session_move", "place_session_check", "place_session_view", "place_session_undo", "place_session_export", "route_session_start", "route_session_route", "route_session_draw", "route_session_fanout", "route_session_check", "route_session_ripup", "route_session_undo", "route_session_view", "route_session_export",
     "lib_check_package", "lib_render_package",
     # Part sourcing queries part providers (registries, local libraries)
     # and datasheet fetch downloads a PDF; neither reaches the bridge.
@@ -214,8 +214,25 @@ _DESIGN_BRIDGE = frozenset(
 # --- explicit interaction overrides (from the DelphiScript bridge audit) ----
 # Only tools that are NOT plain readonly/silent under the default rules.
 INTERACTION_OVERRIDES = {
-    # Altium Agent: writes the DSN file it exports (into the outputs folder).
-    "route_export_dsn": SILENT,
+    # Writes the fan-out it plans as an SES (into the outputs folder).
+    "route_power_fanout": SILENT,
+    # Sessions write their session file (and pictures, plans, an SES) in the outputs folder.
+    "place_session_start": SILENT,
+    "place_session_part": SILENT,
+    "place_session_move": SILENT,
+    "place_session_check": SILENT,
+    "place_session_view": SILENT,
+    "place_session_undo": SILENT,
+    "place_session_export": SILENT,
+    "route_session_start": SILENT,
+    "route_session_route": SILENT,
+    "route_session_draw": SILENT,
+    "route_session_fanout": SILENT,
+    "route_session_check": SILENT,
+    "route_session_ripup": SILENT,
+    "route_session_undo": SILENT,
+    "route_session_view": SILENT,
+    "route_session_export": SILENT,
     # Non-suppressible modal dialogs that block the single-threaded loop.
     "proj_sync_pcb": MODAL,          # ECO / Update-PCB dialog
     "proj_sync_schematic": MODAL,    # Update-Schematic dialog
@@ -435,3 +452,52 @@ def catalog(names) -> list[dict[str, str]]:
     records = [tool_metadata(n) for n in names]
     records.sort(key=lambda r: (r["category"], r["name"]))
     return records
+
+
+#: Badged ``readonly`` because they leave the Altium session alone, but they
+#: still write: a journal, a plan or report file, a background job, the live
+#: view, or the session's default project. ``readOnlyHint`` promises a client
+#: no side effects at all, so these do not get it.
+LOCAL_STATE_WRITERS = frozenset({
+    "design_job_start",
+    "design_live_note",
+    "design_live_snapshot",
+    "design_preview_plan",
+    "design_session_log",
+    "design_session_report",
+    "design_session_start",
+    "design_snapshot_inventory",
+    "design_visual_review",
+    "lib_get_pin_list",
+    "place_plan",
+    "proj_read_bom",
+    "proj_set_offline_project",
+    "ref_profile",
+    "route_broker_plan",
+    "route_converge",
+})
+
+#: Name fragments of tools that remove or overwrite work rather than add to
+#: it. Only ever consulted for tools that are not read-only.
+_DESTRUCTIVE_FRAGMENTS = (
+    "delete", "remove", "unroute", "uninstall", "clear_", "restore",
+    "undo", "replace", "cleanup", "trim",
+)
+
+
+def tool_annotations(name: str):
+    """The MCP ``ToolAnnotations`` for one tool, from its interaction badge.
+
+    ``readonly`` becomes ``readOnlyHint`` unless the tool is in
+    :data:`LOCAL_STATE_WRITERS`. A writer is ``destructiveHint`` only when
+    its name says it removes or overwrites something, so a client can tell
+    "adds a via" from "deletes a net" without reading the description.
+    """
+    from mcp.types import ToolAnnotations
+
+    if interaction_of(name) == READONLY and name not in LOCAL_STATE_WRITERS:
+        return ToolAnnotations(readOnlyHint=True)
+    return ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=any(f in name for f in _DESTRUCTIVE_FRAGMENTS),
+    )

@@ -4,15 +4,15 @@
 A board is routed the way a designer routes it, not in one autorouter run:
 
 1. **Differential pairs** first, coupled, by the in-house engine
-   (``pcb_autoroute`` with ``diff_pairs``); Freerouting routes the two
-   halves as unrelated nets.
+   (``pcb_autoroute`` with ``diff_pairs``).
 2. **Critical nets**: clocks and crystal nets, and short local nets, by the
    in-house engine, which keeps bends to 45 degrees and IC pins straight out.
-3. **The bulk** (power not carried by a pour, then signals) by Freerouting,
-   run as a separate process when it is installed and allowed; otherwise by
-   the in-house engine. Pours are left to the pours.
-4. Repour, DRC, then ``route_converge`` until the clashes are gone or only
-   ones that need a person remain.
+3. **Power and ground**: a via from each pad to its plane (route_power_fanout).
+4. **The bulk** (power not carried by a pour, then signals) by the in-house
+   engine. In a routing session the agent does this a few nets at a time
+   (route_session_route), checking as it goes.
+5. Stitching between pours, repour, DRC, then ``route_converge`` until the
+   clashes are gone or only ones that need a person remain.
 
 Altium's Situs finishes: after the bulk, ``route_situs`` routes the
 connections still open (Connections On Selected Components with every part
@@ -22,9 +22,8 @@ once its first pass has boxed pins in (BoardKit's lesson). The interactive
 router stays a person's tool (length tuning, the last awkward connection).
 
 Copper already on the board is protected: a fully routed net is left alone,
-and a partly routed one keeps its copper (Freerouting gets it as fixed
-wiring; nothing here unroutes it). A net is only ever ripped up by
-``route_converge`` when the broker routed it.
+and a partly routed one keeps its copper (nothing here unroutes it). A net
+is only ever ripped up by ``route_converge`` when the broker routed it.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ PAIR_SUFFIX = re.compile(r"^(.*?)(_?)(P|N|\+|-|DP|DM)$", re.IGNORECASE)
 #: A net whose pins all lie within this (half-perimeter of their box) is local.
 LOCAL_MM = 3.0
 
-ENGINES = ("inhouse", "freerouting", "altium")
+ENGINES = ("inhouse", "altium")
 
 
 def _net_pins(doc: PcbDocument) -> dict[str, list[tuple[float, float, str]]]:
@@ -87,15 +86,14 @@ def pair_nets(doc: PcbDocument) -> list[tuple[str, str, str]]:
 
 
 def poured_nets(doc: PcbDocument) -> set[str]:
-    """Nets that own a polygon pour (connected by the pour and vias, not tracks)."""
-    out = set()
-    for poly in doc.polygons or []:
-        net = poly.get("net") if isinstance(poly, dict) else getattr(poly, "net", None)
-        if isinstance(net, int):
-            net = doc.nets[net] if 0 <= net < len(doc.nets) else None
-        if net:
-            out.add(net)
-    return out
+    """Nets carried by pours and planes (joined by them and vias, not tracks).
+
+    A token pour does not count: a net whose pours cover less than a tenth of
+    the board is a track-routed supply (routing.fanout.plane_nets).
+    """
+    from .fanout import plane_nets
+
+    return plane_nets(doc)
 
 
 def classify(doc: PcbDocument) -> dict[str, Any]:
@@ -142,20 +140,10 @@ def classify(doc: PcbDocument) -> dict[str, Any]:
             "hpwl_mm": {n: round(_hpwl(p), 2) for n, p in pins.items() if len(p) >= 2}}
 
 
-def _batches(nets: list[str], size: int) -> list[list[str]]:
-    if not nets:
-        return []
-    if size <= 0:
-        return [nets]
-    return [nets[i:i + size] for i in range(0, len(nets), size)]
-
-
-def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_ready: bool = False,
-         batch_size: int = 0, profile: dict | None = None, max_passes: int = 50,
+def plan(doc: PcbDocument, *, engines: list[str] | None = None, profile: dict | None = None,
          reference: PcbDocument | None = None) -> dict:
     """The broker's plan: steps, each an exact tool call with its reason."""
     engines = [e for e in (engines or list(ENGINES)) if e in ENGINES]
-    use_fr = "freerouting" in engines and freerouting_ready
     c = classify(doc)
     t = c["tiers"]
     src = str(doc.path)
@@ -169,7 +157,7 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
     to_route = t["pair"] + t["critical"] + t["power"] + t["signal"]
     if not to_route:
         return {"plan_version": PLAN_VERSION, "source": src, "origin_mil": list(doc.origin_mil),
-                "engines": engines, "freerouting": use_fr, "tiers": t, "pairs": [], "protected": c["protected"],
+                "engines": engines, "tiers": t, "pairs": [], "protected": c["protected"],
                 "unrouted_connections": c["unrouted_connections"], "routed_by_plan": [], "steps": [],
                 "notes": ["Nothing to route: every connection is made (by tracks, pours or fills)."],
                 "counts": {k: len(v) for k, v in t.items()}}
@@ -212,22 +200,31 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
              "direct paths", engine="inhouse", tier="critical",
              then="poll design_job_status, then pcb_autoroute_apply with the job id")
     bulk = sorted(t["power"], key=lambda n: -hp.get(n, 0)) + sorted(t["signal"], key=lambda n: hp.get(n, 0))
-    if bulk:
-        if use_fr:
-            for i, b in enumerate(_batches(bulk, batch_size), 1):
-                step("route_freerouting", {"expect_file": src, "route_only": b, "max_passes": max_passes},
-                     f"bulk batch {i}: {len(b)} net(s) by Freerouting (an external process), with every "
-                     "other net's copper fixed", engine="freerouting", tier="bulk",
-                     then="poll route_freerouting_status, then route_import_ses with the job id")
-        else:
-            step("pcb_autoroute", {"expect_file": src, "nets": bulk, "diff_pairs": False},
-                 f"{len(bulk)} power and signal net(s) by the in-house engine"
-                 + ("" if "freerouting" not in engines else " (Freerouting is not installed or not usable)"),
-                 engine="inhouse", tier="bulk",
-                 then="poll design_job_status, then pcb_autoroute_apply with the job id")
+    # Power and ground go in pours and planes, not tracks. Each of their pads
+    # gets a short via to its plane BEFORE the bulk of the signals, so the vias
+    # get their spots; the signals then route round them. Routed as tracks among
+    # the signals, they took the room the signals needed, and an autorouter's own
+    # fan-out placed too few vias (Altium's WiFi example: 66% of the signal
+    # connections routing everything at once; all of them this way).
     if t["poured"]:
-        notes.append(f"{len(t['poured'])} net(s) are carried by pours and left to them: "
-                     + ", ".join(t["poured"][:12]) + ("..." if len(t["poured"]) > 12 else ""))
+        step("route_power_fanout", {"expect_file": src, "nets": sorted(t["poured"])},
+             f"a via from each pad of {len(t['poured'])} pour and plane net(s) to its plane, before the "
+             "signals take the room (pads on a layer their net is poured on are joined by the pour)",
+             engine="fanout", tier="power", then="route_import_ses with the job id")
+    if bulk:
+        step("pcb_autoroute", {"expect_file": src, "nets": bulk, "diff_pairs": False},
+             f"{len(bulk)} power and signal net(s) by the in-house engine, with power and ground left to "
+             "their pours and planes; in a routing session, route_session_route a few at a time",
+             engine="inhouse", tier="bulk",
+             then="poll design_job_status, then pcb_autoroute_apply with the job id")
+    if t["poured"]:
+        step("route_power_fanout", {"expect_file": src, "nets": sorted(t["poured"]), "pads": False,
+                                    "stitch_spacing_mm": 5.0},
+             "stitching vias join each net's pours on different layers, last, once everything else has its room",
+             engine="fanout", tier="stitch", then="route_import_ses with the job id")
+    if t["poured"]:
+        notes.append(f"{len(t['poured'])} net(s) are carried by pours and planes, their pads fanned out "
+                     "to them: " + ", ".join(t["poured"][:12]) + ("..." if len(t["poured"]) > 12 else ""))
     if "altium" in engines:
         step("route_situs", {"expect_file": src},
              "Situs finishes the connections still open (locked copper stays); skip it when "
@@ -249,7 +246,7 @@ def plan(doc: PcbDocument, *, engines: list[str] | None = None, freerouting_read
     return {"plan_version": PLAN_VERSION, "source": src, "origin_mil": list(doc.origin_mil),
             "reference": str(reference.path) if reference is not None else None,
             "reference_placement": ref_place,
-            "engines": engines, "freerouting": use_fr, "tiers": {k: v for k, v in t.items()},
+            "engines": engines, "tiers": {k: v for k, v in t.items()},
             "pairs": [{"name": n, "positive": p, "negative": q} for n, p, q in c["pairs"]],
             "protected": c["protected"], "unrouted_connections": c["unrouted_connections"],
             "routed_by_plan": sorted(set(t["pair"]) | set(t["critical"]) | set(bulk)),

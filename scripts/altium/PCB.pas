@@ -950,6 +950,11 @@ Var
     RuleWidthIter : IPCB_MaxMinWidthConstraint;
     RuleHoleIter : IPCB_MaxMinHoleSizeConstraint;
     RuleViaIter : IPCB_RoutingViaStyleRule;
+    RuleDiffIter : IPCB_DifferentialPairsRoutingRule;
+    WmMinS, WmMaxS, WmPrefS, WidthMMReport : String;
+    DpMinW, DpMaxW, DpPrefW, DpMinG, DpMaxG, DpPrefG, DpUnc, DpReport, DpDesc : String;
+    DpAsked, DpWritten : Integer;
+    CW : TCoord;
     RuleName, V, GapStr, MinWStr, MaxWStr, FavWStr, MinHStr, MaxHStr : String;
     VMinS, VMaxS, VPrefS, VMinH, VMaxH, VPrefH, ViaReport, ViaDesc, ViaProblem : String;
     NMinS, NMaxS, NPrefS, NMinH, NMaxH, NPrefH : TCoord;
@@ -957,6 +962,7 @@ Var
     UpdatedCount, Kind, ValMils : Integer;
     GapWanted, GapBefore, GapAfter : TCoord;
     GapReport, GapMMStr : String;
+    RuleSliver : IPCB_Rule;
     L : TLayer;
     Found, GapVerified, GapKindSupported : Boolean;
     EnabledAsked, EnabledWant : Boolean;
@@ -1074,9 +1080,13 @@ Begin
       corpus, and the old note generalised "kinds 52+ share the
       interface" from a single measurement. So the write below is checked
       by reading the value back rather than assumed. }
+    { 53 = MinimumSolderMaskSliver: its descriptor reads "(Gap=10mil)", so it
+      is tried here too. Like 63 it is only counted when the read-back
+      confirms the new value. }
     GapKindSupported := (Kind = eRule_Clearance) Or (Kind = 24)
-        Or (Kind = 52) Or (Kind = 63);
-    If ((GapStr <> '') Or (GapMMStr <> '')) And GapKindSupported Then
+        Or (Kind = 52) Or (Kind = 63) Or (Kind = 53);
+    If ((GapStr <> '') Or (GapMMStr <> '')) And GapKindSupported
+        And (Kind <> 53) Then
     Begin
         Iter := Board.BoardIterator_Create;
         Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
@@ -1113,6 +1123,40 @@ Begin
                     Found := True;
                 End;
                 If Not Found Then RuleClearIter := Iter.NextPCBObject;
+            End;
+        Finally
+            Board.BoardIterator_Destroy(Iter);
+        End;
+    End;
+
+    { 53 = MinimumSolderMaskSliver: not an IPCB_ClearanceConstraint, so .Gap
+      is "Undeclared identifier" on it and kills the polling loop. Its value
+      is MinSolderMaskSliver on a plain IPCB_Rule (same as PcbAutomation.pas
+      in the Kame FMU sample). Read back like the Gap path. }
+    If ((GapStr <> '') Or (GapMMStr <> '')) And (Kind = 53) Then
+    Begin
+        Iter := Board.BoardIterator_Create;
+        Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Found := False;
+        Try
+            RuleSliver := Iter.FirstPCBObject;
+            While (RuleSliver <> Nil) And (Not Found) Do
+            Begin
+                If RuleSliver.Name = RuleName Then
+                Begin
+                    If GapMMStr <> '' Then
+                        GapWanted := MMToCoord(StrToFloatDef(GapMMStr, 0))
+                    Else GapWanted := MilsToCoord(StrToIntDef(GapStr, 0));
+                    Try GapBefore := RuleSliver.MinSolderMaskSliver; Except End;
+                    Try RuleSliver.MinSolderMaskSliver := GapWanted; Except End;
+                    Try GapAfter := RuleSliver.MinSolderMaskSliver; Except End;
+                    GapVerified := (GapAfter = GapWanted);
+                    If GapVerified Then Inc(UpdatedCount);
+                    Found := True;
+                End;
+                If Not Found Then RuleSliver := Iter.NextPCBObject;
             End;
         Finally
             Board.BoardIterator_Destroy(Iter);
@@ -1199,6 +1243,167 @@ Begin
             End;
         Finally
             Board.BoardIterator_Destroy(Iter);
+        End;
+    End;
+
+    { WIDTH IN MM. Integer mils cannot say 0.1 mm (3.937 mil), and the    }
+    { SODIMM build ended up with 4 mil where it wanted 0.1 mm. Same typed }
+    { iterator path as the mil fields above, read back at the top layer.  }
+    WmMinS := ExtractJsonValue(Params, 'min_width_mm');
+    WmMaxS := ExtractJsonValue(Params, 'max_width_mm');
+    WmPrefS := ExtractJsonValue(Params, 'favored_width_mm');
+    WidthMMReport := '';
+    If (Kind = eRule_MaxMinWidth) And
+       ((WmMinS <> '') Or (WmMaxS <> '') Or (WmPrefS <> '')) Then
+    Begin
+        Iter := Board.BoardIterator_Create;
+        Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Found := False;
+        Try
+            RuleWidthIter := Iter.FirstPCBObject;
+            While (RuleWidthIter <> Nil) And (Not Found) Do
+            Begin
+                If (RuleWidthIter.RuleKind = eRule_MaxMinWidth)
+                    And (RuleWidthIter.Name = RuleName) Then
+                Begin
+                    Found := True;
+                    If WmMinS <> '' Then
+                    Begin
+                        CW := MMToCoord(StrToFloatDef(WmMinS, 0));
+                        Try
+                            For L := MinLayer To MaxLayer Do
+                                RuleWidthIter.MinWidth(L) := CW;
+                        Except End;
+                        If RuleWidthIter.MinWidth(eTopLayer) = CW Then Inc(UpdatedCount);
+                    End;
+                    If WmMaxS <> '' Then
+                    Begin
+                        CW := MMToCoord(StrToFloatDef(WmMaxS, 0));
+                        Try
+                            For L := MinLayer To MaxLayer Do
+                                RuleWidthIter.MaxWidth(L) := CW;
+                        Except End;
+                        If RuleWidthIter.MaxWidth(eTopLayer) = CW Then Inc(UpdatedCount);
+                    End;
+                    If WmPrefS <> '' Then
+                    Begin
+                        CW := MMToCoord(StrToFloatDef(WmPrefS, 0));
+                        Try
+                            For L := MinLayer To MaxLayer Do
+                                RuleWidthIter.FavoredWidth(L) := CW;
+                        Except End;
+                        If RuleWidthIter.FavoredWidth(eTopLayer) = CW Then Inc(UpdatedCount);
+                    End;
+                    WidthMMReport := ',"width_mm":{"min":' + FloatToJsonStr(CoordToMM(RuleWidthIter.MinWidth(eTopLayer)))
+                        + ',"max":' + FloatToJsonStr(CoordToMM(RuleWidthIter.MaxWidth(eTopLayer)))
+                        + ',"favored":' + FloatToJsonStr(CoordToMM(RuleWidthIter.FavoredWidth(eTopLayer))) + '}';
+                End;
+                If Not Found Then RuleWidthIter := Iter.NextPCBObject;
+            End;
+        Finally
+            Board.BoardIterator_Destroy(Iter);
+        End;
+    End;
+
+    { THE DIFFERENTIAL PAIR RULE: widths, gaps and uncoupled length.     }
+    { This kind used to answer "0 properties updated", which left every  }
+    { pair rule at Altium's factory width (15 mil on the SODIMM board)   }
+    { with no route to change it but the Rules dialog. Typed iterator    }
+    { local, function-call indexed form, every layer written, the top    }
+    { layer read back. Only values that read back are counted.           }
+    DpReport := '';
+    DpAsked := 0;
+    DpWritten := 0;
+    DpMinW := ExtractJsonValue(Params, 'dp_min_width_mm');
+    DpMaxW := ExtractJsonValue(Params, 'dp_max_width_mm');
+    DpPrefW := ExtractJsonValue(Params, 'dp_pref_width_mm');
+    DpMinG := ExtractJsonValue(Params, 'dp_min_gap_mm');
+    DpMaxG := ExtractJsonValue(Params, 'dp_max_gap_mm');
+    DpPrefG := ExtractJsonValue(Params, 'dp_pref_gap_mm');
+    DpUnc := ExtractJsonValue(Params, 'dp_max_uncoupled_mm');
+    If (DpMinW <> '') Or (DpMaxW <> '') Or (DpPrefW <> '') Or (DpMinG <> '')
+       Or (DpMaxG <> '') Or (DpPrefG <> '') Or (DpUnc <> '') Then
+    Begin
+        If Kind <> eRule_DifferentialPairsRouting Then
+            DpReport := ',"diff_pair_written":false,"diff_pair_note":"dp_* values apply to a '
+                + 'Differential Pairs Routing rule; this is kind ' + IntToStr(Kind) + '. Nothing was written."'
+        Else
+        Begin
+            Iter := Board.BoardIterator_Create;
+            Iter.AddFilter_ObjectSet(MkSet(eRuleObject));
+            Iter.AddFilter_LayerSet(AllLayers);
+            Iter.AddFilter_Method(eProcessAll);
+            Found := False;
+            Try
+                RuleDiffIter := Iter.FirstPCBObject;
+                While (RuleDiffIter <> Nil) And (Not Found) Do
+                Begin
+                    If (RuleDiffIter.RuleKind = eRule_DifferentialPairsRouting)
+                        And (RuleDiffIter.Name = RuleName) Then
+                    Begin
+                        Found := True;
+                        If DpMinW <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpMinW, 0));
+                            Try For L := MinLayer To MaxLayer Do RuleDiffIter.MinWidth(L) := CW; Except End;
+                            If RuleDiffIter.MinWidth(eTopLayer) = CW Then Inc(DpWritten);
+                        End;
+                        If DpMaxW <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpMaxW, 0));
+                            Try For L := MinLayer To MaxLayer Do RuleDiffIter.MaxWidth(L) := CW; Except End;
+                            If RuleDiffIter.MaxWidth(eTopLayer) = CW Then Inc(DpWritten);
+                        End;
+                        If DpPrefW <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpPrefW, 0));
+                            Try For L := MinLayer To MaxLayer Do RuleDiffIter.PreferedWidth(L) := CW; Except End;
+                            If RuleDiffIter.PreferedWidth(eTopLayer) = CW Then Inc(DpWritten);
+                        End;
+                        If DpMinG <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpMinG, 0));
+                            Try For L := MinLayer To MaxLayer Do RuleDiffIter.MinGap(L) := CW; Except End;
+                            If RuleDiffIter.MinGap(eTopLayer) = CW Then Inc(DpWritten);
+                        End;
+                        If DpMaxG <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpMaxG, 0));
+                            Try For L := MinLayer To MaxLayer Do RuleDiffIter.MaxGap(L) := CW; Except End;
+                            If RuleDiffIter.MaxGap(eTopLayer) = CW Then Inc(DpWritten);
+                        End;
+                        If DpPrefG <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpPrefG, 0));
+                            Try For L := MinLayer To MaxLayer Do RuleDiffIter.PreferedGap(L) := CW; Except End;
+                            If RuleDiffIter.PreferedGap(eTopLayer) = CW Then Inc(DpWritten);
+                        End;
+                        If DpUnc <> '' Then
+                        Begin
+                            Inc(DpAsked); CW := MMToCoord(StrToFloatDef(DpUnc, 0));
+                            Try RuleDiffIter.MaxUncoupledLength := CW; Except End;
+                            If RuleDiffIter.MaxUncoupledLength = CW Then Inc(DpWritten);
+                        End;
+                        UpdatedCount := UpdatedCount + DpWritten;
+                        DpDesc := '';
+                        Try DpDesc := RuleDiffIter.Descriptor; Except End;
+                        DpReport := ',"diff_pair_mm":{"min_width":' + FloatToJsonStr(CoordToMM(RuleDiffIter.MinWidth(eTopLayer)))
+                            + ',"max_width":' + FloatToJsonStr(CoordToMM(RuleDiffIter.MaxWidth(eTopLayer)))
+                            + ',"pref_width":' + FloatToJsonStr(CoordToMM(RuleDiffIter.PreferedWidth(eTopLayer)))
+                            + ',"min_gap":' + FloatToJsonStr(CoordToMM(RuleDiffIter.MinGap(eTopLayer)))
+                            + ',"max_gap":' + FloatToJsonStr(CoordToMM(RuleDiffIter.MaxGap(eTopLayer)))
+                            + ',"pref_gap":' + FloatToJsonStr(CoordToMM(RuleDiffIter.PreferedGap(eTopLayer)))
+                            + ',"max_uncoupled":' + FloatToJsonStr(CoordToMM(RuleDiffIter.MaxUncoupledLength)) + '}'
+                            + ',"diff_pair_written":' + BoolToJsonStr(DpWritten = DpAsked)
+                            + ',"descriptor":"' + EscapeJsonString(DpDesc) + '"';
+                    End;
+                    If Not Found Then RuleDiffIter := Iter.NextPCBObject;
+                End;
+            Finally
+                Board.BoardIterator_Destroy(Iter);
+            End;
         End;
     End;
 
@@ -1344,7 +1549,7 @@ Begin
         '{"name":"' + EscapeJsonString(Rule.Name) + '",'
         + '"rule_kind":' + IntToStr(Kind) + ','
         + '"properties_updated":' + IntToStr(UpdatedCount)
-        + EnabledReport + GapReport + ViaReport + '}');
+        + EnabledReport + GapReport + ViaReport + WidthMMReport + DpReport + '}');
 End;
 
 {..............................................................................}
@@ -4389,7 +4594,7 @@ Begin
         If NewName <> '' Then
             Try LayerObj.Name := NewName; Except End;
         If ThickStr <> '' Then
-            Try LayerObj.CopperThickness := MilsToCoord(StrToIntDef(ThickStr, 0)); Except End;
+            Try LayerObj.CopperThickness := MilsToCoordF(StrToFloatDef(ThickStr, 0)); Except End;
 
         If TypeStr = 'none' Then
             Try LayerObj.Dielectric.DielectricType := eNoDielectric; Except End
@@ -4401,7 +4606,7 @@ Begin
             Try LayerObj.Dielectric.DielectricType := eSurfaceMaterial; Except End;
 
         If HeightStr <> '' Then
-            Try LayerObj.Dielectric.DielectricHeight := MilsToCoord(StrToIntDef(HeightStr, 0)); Except End;
+            Try LayerObj.Dielectric.DielectricHeight := MilsToCoordF(StrToFloatDef(HeightStr, 0)); Except End;
         If ConstStr <> '' Then
             Try LayerObj.Dielectric.DielectricConstant := StrToFloatDef(ConstStr, 1.0); Except End;
         If Material <> '' Then
@@ -4443,7 +4648,7 @@ Begin
         Try ThickBack := LayerObj.CopperThickness / 10000; Except ThickBack := -1; End;
         If AppliedJson <> '' Then AppliedJson := AppliedJson + ',';
         AppliedJson := AppliedJson + '"copper_thickness_mils":' + FloatToJsonStr(ThickBack);
-        If Abs(ThickBack - StrToIntDef(ThickStr, 0)) > 0.01 Then
+        If Abs(ThickBack - StrToFloatDef(ThickStr, 0)) > 0.01 Then
         Begin
             If RejectedJson <> '' Then RejectedJson := RejectedJson + ',';
             RejectedJson := RejectedJson + '"copper_thickness_mils"';
@@ -4470,7 +4675,7 @@ Begin
         Try HeightBack := LayerObj.Dielectric.DielectricHeight / 10000; Except HeightBack := -1; End;
         If AppliedJson <> '' Then AppliedJson := AppliedJson + ',';
         AppliedJson := AppliedJson + '"dielectric_height_mils":' + FloatToJsonStr(HeightBack);
-        If Abs(HeightBack - StrToIntDef(HeightStr, 0)) > 0.01 Then
+        If Abs(HeightBack - StrToFloatDef(HeightStr, 0)) > 0.01 Then
         Begin
             If RejectedJson <> '' Then RejectedJson := RejectedJson + ',';
             RejectedJson := RejectedJson + '"dielectric_height_mils"';
@@ -4516,6 +4721,62 @@ Begin
         + '"layer":"' + EscapeJsonString(ResolvedName) + '",'
         + '"applied":{' + AppliedJson + '},'
         + '"rejected":[' + RejectedJson + ']}');
+End;
+
+{..............................................................................}
+{ PCB_ImportLayerStack - Replace the whole layer stack in one call from       }
+{ Altium's own parameter text (the V9_* keys of the board record), written by }
+{ pcb_import_layer_stack to a file. Board.MasterLayerStack.                   }
+{ Import_FromParameters is the call the Kame FMU PcbAutomation.pas sample     }
+{ made on AD26 (30352 chars, logged "imported"). Its counterpart              }
+{ Export_ToParameters crashes Altium from a script, which is why the current  }
+{ stack is read from the SAVED file by Python, never exported here.           }
+{ Params: path (the parameter file).                                          }
+{..............................................................................}
+
+Function PCB_ImportLayerStack(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    PathStr, Content : String;
+    Ok : Boolean;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    PathStr := ExtractJsonValue(Params, 'path');
+    If (PathStr = '') Or (Not FileExists(PathStr)) Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'MISSING_PARAM',
+            'path must name the stack parameter file pcb_import_layer_stack wrote');
+        Exit;
+    End;
+
+    Content := Trim(ReadFileContent(PathStr));
+    If Pos('V9_STACK_LAYER', Content) = 0 Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'BAD_PARAMS',
+            'the file holds no V9_STACK_LAYER keys; nothing was imported');
+        Exit;
+    End;
+
+    Ok := False;
+    Try
+        Board.MasterLayerStack.Import_FromParameters(Content);
+        Ok := True;
+    Except
+        Ok := False;
+    End;
+
+    If Ok Then MarkDocDirtyByPath(Board.FileName);
+
+    Result := BuildSuccessResponse(RequestId,
+        '{"imported":' + BoolToJsonStr(Ok) + ','
+        + '"chars":' + IntToStr(Length(Content)) + ','
+        + '"board":"' + EscapeJsonString(Board.FileName) + '"}');
 End;
 
 {..............................................................................}
@@ -6549,15 +6810,35 @@ End;
 {..............................................................................}
 { PCB_CreateDesignRule - Create a new design rule                             }
 { Params: rule_type (clearance / width / via_size / differential_pairs /     }
-{         solder_mask_expansion / paste_mask_expansion / vias_under_smd),    }
-{         name, value (mils, signed for the mask kinds), allowed (bool,      }
-{         vias_under_smd only), scope (query expression for Scope1)          }
+{         solder_mask_expansion / paste_mask_expansion / vias_under_smd /     }
+{         routing_via / polygon_connect / plane_connect / plane_clearance /   }
+{         annular_ring / solder_mask_sliver), name, value (mils, signed for   }
+{         the mask kinds), allowed (bool, vias_under_smd only), scope and     }
+{         scope2 (query expressions), and mm_* values, which win over the    }
+{         integer-mil value wherever both are given.                          }
+{                                                                              }
+{ The kinds added in 2026-11 (routing_via onward, diff-pair widths, scope2)  }
+{ write exactly the properties the Kame FMU PcbAutomation.pas sample wrote   }
+{ on AD26 through an untyped IPCB_Rule from the factory, every one logged OK }
+{ with its descriptor on this machine's Altium. No identifier here is new to }
+{ this build: an undeclared one halts the polling loop where Try cannot      }
+{ catch it, so nothing unproven was added.                                   }
 {..............................................................................}
+
+Function RuleMMParam(Params, Key : String; Fallback : TCoord) : TCoord;
+Var
+    S : String;
+Begin
+    Result := Fallback;
+    S := ExtractJsonValue(Params, Key);
+    If S <> '' Then Result := MMToCoord(StrToFloatDef(S, CoordToMM(Fallback)));
+End;
 
 Function PCB_CreateDesignRule(Params : String; RequestId : String) : String;
 Var
     Board : IPCB_Board;
     Rule : IPCB_Rule;
+    RuleAny : IPCB_Rule;
     RuleClear : IPCB_ClearanceConstraint;
     RuleWidth : IPCB_MaxMinWidthConstraint;
     RuleHole : IPCB_MaxMinHoleSizeConstraint;
@@ -6566,9 +6847,11 @@ Var
     RulePMask : IPCB_PasteMaskExpansionRule;
     RuleVUS : IPCB_ViasUnderSMDConstraint;
     RuleTypeStr, RuleName, ValueStr, MaxValueStr, FavoredValueStr : String;
-    ScopeStr, NetScopeStr, MaxUncoupStr, AllowedStr : String;
-    RuleValue, MaxValue, FavoredValue, MaxUncoupVal, NetScopeVal : Integer;
+    ScopeStr, Scope2Str, NetScopeStr, MaxUncoupStr, AllowedStr, StyleStr : String;
+    RuleValue, MaxValue, FavoredValue, MaxUncoupVal, NetScopeVal, Entries : Integer;
     HasMaxValue, AllowedVal : Boolean;
+    CMin, CMax, CPref, GMin, GMax, GPref : TCoord;
+    DescStr : String;
     L : TLayer;
 Begin
     Board := GetPCBBoardAnywhere(0);
@@ -6585,8 +6868,11 @@ Begin
     FavoredValueStr := ExtractJsonValue(Params, 'favored_value');
     MaxUncoupStr := ExtractJsonValue(Params, 'max_uncoupled_length');
     ScopeStr := ExtractJsonValue(Params, 'scope');
+    Scope2Str := ExtractJsonValue(Params, 'scope2');
     NetScopeStr := LowerCase(ExtractJsonValue(Params, 'net_scope'));
     AllowedStr := ExtractJsonValue(Params, 'allowed');
+    StyleStr := LowerCase(ExtractJsonValue(Params, 'style'));
+    Entries := StrToIntDef(ExtractJsonValue(Params, 'entries'), 4);
 
     If RuleName = '' Then
     Begin
@@ -6636,6 +6922,9 @@ Begin
     { surface the union of constraint properties (e.g. AD 26.5+).              }
     { Indexed properties also use function-call form: RuleWidth.MinWidth(L)    }
     { not RuleWidth.MinWidth[L], bracket form is rejected in DelphiScript.    }
+    { The newer kinds below go through RuleAny, an IPCB_Rule straight from    }
+    { the factory, which is the form PcbAutomation.pas proved on AD26 for     }
+    { exactly these properties.                                                }
     Rule := Nil;
     PCBServer.PreProcess;
     Try
@@ -6645,7 +6934,7 @@ Begin
             RuleClear.Name := RuleName;
             RuleClear.NetScope := NetScopeVal;
             RuleClear.LayerKind := eRuleLayerKind_SameLayer;
-            RuleClear.Gap := MilsToCoord(RuleValue);
+            RuleClear.Gap := RuleMMParam(Params, 'mm_gap', MilsToCoord(RuleValue));
             If ScopeStr <> '' Then
                 RuleClear.Scope1Expression := ScopeStr;
             Rule := RuleClear;
@@ -6656,11 +6945,14 @@ Begin
             RuleWidth.Name := RuleName;
             RuleWidth.NetScope := NetScopeVal;
             RuleWidth.LayerKind := eRuleLayerKind_SameLayer;
+            CMin := RuleMMParam(Params, 'mm_min_width', MilsToCoord(RuleValue));
+            CMax := RuleMMParam(Params, 'mm_max_width', MilsToCoord(MaxValue));
+            CPref := RuleMMParam(Params, 'mm_pref_width', MilsToCoord(FavoredValue));
             For L := MinLayer To MaxLayer Do
             Begin
-                RuleWidth.MinWidth(L) := MilsToCoord(RuleValue);
-                RuleWidth.MaxWidth(L) := MilsToCoord(MaxValue);
-                RuleWidth.FavoredWidth(L) := MilsToCoord(FavoredValue);
+                RuleWidth.MinWidth(L) := CMin;
+                RuleWidth.MaxWidth(L) := CMax;
+                RuleWidth.FavoredWidth(L) := CPref;
             End;
             If ScopeStr <> '' Then
                 RuleWidth.Scope1Expression := ScopeStr;
@@ -6672,8 +6964,8 @@ Begin
             RuleHole.Name := RuleName;
             RuleHole.NetScope := NetScopeVal;
             RuleHole.LayerKind := eRuleLayerKind_SameLayer;
-            RuleHole.MinLimit := MilsToCoord(RuleValue);
-            RuleHole.MaxLimit := MilsToCoord(MaxValue);
+            RuleHole.MinLimit := RuleMMParam(Params, 'mm_min_hole', MilsToCoord(RuleValue));
+            RuleHole.MaxLimit := RuleMMParam(Params, 'mm_max_hole', MilsToCoord(MaxValue));
             If ScopeStr <> '' Then
                 RuleHole.Scope1Expression := ScopeStr;
             Rule := RuleHole;
@@ -6681,24 +6973,39 @@ Begin
         Else If RuleTypeStr = 'differential_pairs' Then
         Begin
             { IPCB_DifferentialPairsRoutingRule exposes MinGap / MaxGap /     }
-            { PreferedGap (note SDK spelling: one 'r') as layer-indexed      }
-            { properties, and MaxUncoupledLength as a single scalar. value ->}
-            { MinGap, max_value -> MaxGap, favored_value -> PreferedGap. The }
-            { width constraints shown in the rule's descriptor come from a   }
-            { separate Width rule scoped to the diff pair, not from this    }
-            { interface; create that separately with rule_type='width' if   }
-            { needed.                                                          }
+            { PreferedGap (note SDK spelling: one 'r') and MinWidth /        }
+            { MaxWidth / PreferedWidth as layer-indexed properties, and      }
+            { MaxUncoupledLength as a single scalar. value -> MinGap,       }
+            { max_value -> MaxGap, favored_value -> PreferedGap. The widths  }
+            { were never written before, so every pair rule kept Altium's   }
+            { factory width and the router used it; mm_*_width set them now. }
             RuleDiff := PCBServer.PCBRuleFactory(eRule_DifferentialPairsRouting);
             RuleDiff.Name := RuleName;
             RuleDiff.NetScope := NetScopeVal;
             RuleDiff.LayerKind := eRuleLayerKind_SameLayer;
+            GMin := RuleMMParam(Params, 'mm_min_gap', MilsToCoord(RuleValue));
+            GMax := RuleMMParam(Params, 'mm_max_gap', MilsToCoord(MaxValue));
+            GPref := RuleMMParam(Params, 'mm_pref_gap', MilsToCoord(FavoredValue));
             For L := MinLayer To MaxLayer Do
             Begin
-                RuleDiff.MinGap(L) := MilsToCoord(RuleValue);
-                RuleDiff.MaxGap(L) := MilsToCoord(MaxValue);
-                RuleDiff.PreferedGap(L) := MilsToCoord(FavoredValue);
+                RuleDiff.MinGap(L) := GMin;
+                RuleDiff.MaxGap(L) := GMax;
+                RuleDiff.PreferedGap(L) := GPref;
             End;
-            RuleDiff.MaxUncoupledLength := MilsToCoord(MaxUncoupVal);
+            If ExtractJsonValue(Params, 'mm_min_width') <> '' Then
+            Begin
+                CMin := RuleMMParam(Params, 'mm_min_width', 0);
+                CMax := RuleMMParam(Params, 'mm_max_width', CMin);
+                CPref := RuleMMParam(Params, 'mm_pref_width', CMin);
+                For L := MinLayer To MaxLayer Do
+                Begin
+                    RuleDiff.MaxWidth(L) := CMax;
+                    RuleDiff.MinWidth(L) := CMin;
+                    RuleDiff.PreferedWidth(L) := CPref;
+                End;
+            End;
+            RuleDiff.MaxUncoupledLength := RuleMMParam(Params, 'mm_max_uncoupled',
+                MilsToCoord(MaxUncoupVal));
             If ScopeStr <> '' Then
                 RuleDiff.Scope1Expression := ScopeStr;
             Rule := RuleDiff;
@@ -6712,7 +7019,7 @@ Begin
             { Scope1Expression is what selects vias only: IsVia.            }
             RuleSMask := PCBServer.PCBRuleFactory(eRule_SolderMaskExpansion);
             RuleSMask.Name := RuleName;
-            RuleSMask.Expansion := MilsToCoord(RuleValue);
+            RuleSMask.Expansion := RuleMMParam(Params, 'mm_expansion', MilsToCoord(RuleValue));
             If ScopeStr <> '' Then
                 RuleSMask.Scope1Expression := ScopeStr;
             Rule := RuleSMask;
@@ -6724,7 +7031,7 @@ Begin
             { this kind is the least speculative of the three added here.   }
             RulePMask := PCBServer.PCBRuleFactory(eRule_PasteMaskExpansion);
             RulePMask.Name := RuleName;
-            RulePMask.Expansion := MilsToCoord(RuleValue);
+            RulePMask.Expansion := RuleMMParam(Params, 'mm_expansion', MilsToCoord(RuleValue));
             If ScopeStr <> '' Then
                 RulePMask.Scope1Expression := ScopeStr;
             Rule := RulePMask;
@@ -6741,15 +7048,100 @@ Begin
                 RuleVUS.Scope1Expression := ScopeStr;
             Rule := RuleVUS;
         End
+        Else If RuleTypeStr = 'routing_via' Then
+        Begin
+            { A scoped Routing Via rule, so a class can route with a small  }
+            { via while Altium's blank-board RoutingVias (50/28 mil) is     }
+            { left for nothing. Sizes in mm, all six.                       }
+            RuleAny := PCBServer.PCBRuleFactory(eRule_RoutingViaStyle);
+            RuleAny.Name := RuleName;
+            RuleAny.MaxHoleWidth := RuleMMParam(Params, 'mm_hole_max', MMToCoord(0.3));
+            RuleAny.MinHoleWidth := RuleMMParam(Params, 'mm_hole_min', MMToCoord(0.2));
+            RuleAny.PreferedHoleWidth := RuleMMParam(Params, 'mm_hole_pref', MMToCoord(0.2));
+            RuleAny.MaxWidth := RuleMMParam(Params, 'mm_via_max', MMToCoord(0.6));
+            RuleAny.MinWidth := RuleMMParam(Params, 'mm_via_min', MMToCoord(0.4));
+            RuleAny.PreferedWidth := RuleMMParam(Params, 'mm_via_pref', MMToCoord(0.4));
+            If ScopeStr <> '' Then
+                RuleAny.Scope1Expression := ScopeStr;
+            Rule := RuleAny;
+        End
+        Else If RuleTypeStr = 'polygon_connect' Then
+        Begin
+            RuleAny := PCBServer.PCBRuleFactory(eRule_PolygonConnectStyle);
+            RuleAny.Name := RuleName;
+            If StyleStr = 'direct' Then
+                RuleAny.ConnectStyle := eDirectConnectToPlane
+            Else
+            Begin
+                RuleAny.ConnectStyle := eReliefConnectToPlane;
+                RuleAny.ReliefConductorWidth := RuleMMParam(Params, 'mm_conductor', MMToCoord(0.25));
+                RuleAny.ReliefAirGap := RuleMMParam(Params, 'mm_air_gap', MMToCoord(0.25));
+                RuleAny.ReliefEntries := Entries;
+            End;
+            If ScopeStr <> '' Then
+                RuleAny.Scope1Expression := ScopeStr;
+            Rule := RuleAny;
+        End
+        Else If RuleTypeStr = 'plane_connect' Then
+        Begin
+            RuleAny := PCBServer.PCBRuleFactory(eRule_PowerPlaneConnectStyle);
+            RuleAny.Name := RuleName;
+            If StyleStr = 'direct' Then
+                RuleAny.PlaneConnectStyle := eDirectConnectToPlane
+            Else
+            Begin
+                RuleAny.PlaneConnectStyle := eReliefConnectToPlane;
+                RuleAny.ReliefConductorWidth := RuleMMParam(Params, 'mm_conductor', MMToCoord(0.25));
+                RuleAny.ReliefAirGap := RuleMMParam(Params, 'mm_air_gap', MMToCoord(0.25));
+                RuleAny.ReliefExpansion := RuleMMParam(Params, 'mm_expansion', MMToCoord(0.5));
+                RuleAny.ReliefEntries := Entries;
+            End;
+            If ScopeStr <> '' Then
+                RuleAny.Scope1Expression := ScopeStr;
+            Rule := RuleAny;
+        End
+        Else If RuleTypeStr = 'plane_clearance' Then
+        Begin
+            RuleAny := PCBServer.PCBRuleFactory(eRule_PowerPlaneClearance);
+            RuleAny.Name := RuleName;
+            RuleAny.Clearance := RuleMMParam(Params, 'mm_clearance', MilsToCoord(RuleValue));
+            If ScopeStr <> '' Then
+                RuleAny.Scope1Expression := ScopeStr;
+            Rule := RuleAny;
+        End
+        Else If RuleTypeStr = 'annular_ring' Then
+        Begin
+            RuleAny := PCBServer.PCBRuleFactory(eRule_MinimumAnnularRing);
+            RuleAny.Name := RuleName;
+            RuleAny.Minimum := RuleMMParam(Params, 'mm_min', MilsToCoord(RuleValue));
+            If ScopeStr <> '' Then
+                RuleAny.Scope1Expression := ScopeStr;
+            Rule := RuleAny;
+        End
+        Else If RuleTypeStr = 'solder_mask_sliver' Then
+        Begin
+            RuleAny := PCBServer.PCBRuleFactory(eRule_MinimumSolderMaskSliver);
+            RuleAny.Name := RuleName;
+            RuleAny.MinSolderMaskSliver := RuleMMParam(Params, 'mm_gap', MilsToCoord(RuleValue));
+            If ScopeStr <> '' Then
+                RuleAny.Scope1Expression := ScopeStr;
+            Rule := RuleAny;
+        End
         Else
         Begin
             Result := BuildErrorResponse(RequestId, 'INVALID_PARAM',
                 'Unknown rule_type: ' + RuleTypeStr + '. Use clearance, width, '
                 + 'via_size, differential_pairs, solder_mask_expansion, '
-                + 'paste_mask_expansion, or vias_under_smd');
+                + 'paste_mask_expansion, vias_under_smd, routing_via, '
+                + 'polygon_connect, plane_connect, plane_clearance, '
+                + 'annular_ring or solder_mask_sliver');
             Exit;
         End;
 
+        { The second object of a binary rule (clearance between A and B,     }
+        { polygon connect from a pour to a via class). Base property.        }
+        If Scope2Str <> '' Then
+            Rule.Scope2Expression := Scope2Str;
         Rule.Enabled := True;
         Board.AddPCBObject(Rule);
         PCBServer.SendMessageToRobots(Board.I_ObjectAddress, c_Broadcast,
@@ -6760,6 +7152,11 @@ Begin
 
     MarkDocDirtyByPath(Board.FileName);
 
+    { Altium's own summary of the values the rule now holds, so a caller }
+    { can see that the widths and gaps landed rather than assume it.     }
+    DescStr := '';
+    Try DescStr := Rule.Descriptor; Except DescStr := ''; End;
+
     { vias_under_smd carries no measurement, so reporting value_mils for it }
     { would be reporting a number the rule does not hold.                   }
     If RuleTypeStr = 'vias_under_smd' Then
@@ -6767,13 +7164,15 @@ Begin
             '{"created":true,'
             + '"name":"' + EscapeJsonString(RuleName) + '",'
             + '"rule_type":"' + EscapeJsonString(RuleTypeStr) + '",'
-            + '"allowed":' + BoolToJsonStr(AllowedVal) + '}')
+            + '"allowed":' + BoolToJsonStr(AllowedVal) + ','
+            + '"descriptor":"' + EscapeJsonString(DescStr) + '"}')
     Else
         Result := BuildSuccessResponse(RequestId,
             '{"created":true,'
             + '"name":"' + EscapeJsonString(RuleName) + '",'
             + '"rule_type":"' + EscapeJsonString(RuleTypeStr) + '",'
-            + '"value_mils":' + IntToStr(RuleValue) + '}');
+            + '"value_mils":' + IntToStr(RuleValue) + ','
+            + '"descriptor":"' + EscapeJsonString(DescStr) + '"}');
 End;
 
 {..............................................................................}
@@ -8796,6 +9195,462 @@ Begin
         '{"success":true,'
         + '"x1":' + IntToStr(X1) + ',"y1":' + IntToStr(Y1) + ','
         + '"x2":' + IntToStr(X2) + ',"y2":' + IntToStr(Y2) + '}');
+End;
+
+{..............................................................................}
+{ PCB_SetBoardOutline - Define the board outline as a closed polygon          }
+{ Params: points_mm="x,y;x,y;..." (>= 3 vertices, mm, board coordinates, in   }
+{ order around the outline; the closing edge back to the first vertex is     }
+{ implicit). Straight edges only: approximate arcs with short chords.        }
+{..............................................................................}
+
+Function PCB_SetBoardOutline(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Pts, Remaining, Pair, VxStr, VyStr : String;
+    SemiPos, CommaPos, N, I : Integer;
+    Xs, Ys : TStringList;
+    Seg : TPolySegment;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    Pts := ExtractJsonValue(Params, 'points_mm');
+    If Pts = '' Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'points_mm is required: "x,y;x,y;..." in mm');
+        Exit;
+    End;
+
+    Xs := TStringList.Create;
+    Ys := TStringList.Create;
+    Try
+        Remaining := Pts;
+        While Remaining <> '' Do
+        Begin
+            SemiPos := Pos(';', Remaining);
+            If SemiPos > 0 Then
+            Begin
+                Pair := Copy(Remaining, 1, SemiPos - 1);
+                Remaining := Copy(Remaining, SemiPos + 1, Length(Remaining));
+            End
+            Else
+            Begin
+                Pair := Remaining;
+                Remaining := '';
+            End;
+            If Pair <> '' Then
+            Begin
+                CommaPos := Pos(',', Pair);
+                If CommaPos < 2 Then
+                Begin
+                    Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'Bad vertex "' + Pair + '", expected x,y');
+                    Exit;
+                End;
+                Xs.Add(Copy(Pair, 1, CommaPos - 1));
+                Ys.Add(Copy(Pair, CommaPos + 1, Length(Pair)));
+            End;
+        End;
+
+        N := Xs.Count;
+        If N < 3 Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'At least 3 vertices are required');
+            Exit;
+        End;
+
+        PCBServer.PreProcess;
+        Try
+            Board.BoardOutline.PointCount := N;
+            Seg := TPolySegment;   { instantiate before any field write, as PCB_SetBoardShape }
+            Seg.Kind := ePolySegmentLine;
+            For I := 0 To N - 1 Do
+            Begin
+                VxStr := Xs.Strings[I];
+                VyStr := Ys.Strings[I];
+                Seg.vx := MMToCoord(StrToFloatDef(VxStr, 0));
+                Seg.vy := MMToCoord(StrToFloatDef(VyStr, 0));
+                Board.BoardOutline.Segments[I] := Seg;
+            End;
+            ClosePolySegments(Board.BoardOutline, N);
+
+            Board.BoardOutline.Invalidate;
+            Board.BoardOutline.Rebuild;
+            Board.BoardOutline.Validate;
+            RefreshBoardOutline(Board);
+        Finally
+            PCBServer.PostProcess;
+        End;
+    Finally
+        Xs.Free;
+        Ys.Free;
+    End;
+
+    MarkDocDirtyByPath(Board.FileName);
+
+    Result := BuildSuccessResponse(RequestId,
+        '{"success":true,"vertices":' + IntToStr(N) + '}');
+End;
+
+{..............................................................................}
+{ PCB_SetSheetPosition - Design > Board Options > Sheet Position.             }
+{ Params: fit_margin_mm (>= 0: size the sheet to the board outline's bounding }
+{ box plus this margin) OR x_mm, y_mm, width_mm, height_mm (explicit).        }
+{ The sheet is the coloured area behind the board; it is not the outline.     }
+{ Written through Board.PCBSheet (SheetX/SheetY/SheetWidth/SheetHeight, the   }
+{ board record keys SHEETX.. in the PcbDoc) and read back.                    }
+{..............................................................................}
+
+Function PCB_SetSheetPosition(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Sheet : Variant;
+    MarginStr, XStr, YStr, WStr, HStr : String;
+    I, N : Integer;
+    Vx, Vy, MinX, MinY, MaxX, MaxY, Margin : Double;
+    NewX, NewY, NewW, NewH : TCoord;
+    GotX, GotY, GotW, GotH : TCoord;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    MarginStr := ExtractJsonValue(Params, 'fit_margin_mm');
+    XStr := ExtractJsonValue(Params, 'x_mm');
+    YStr := ExtractJsonValue(Params, 'y_mm');
+    WStr := ExtractJsonValue(Params, 'width_mm');
+    HStr := ExtractJsonValue(Params, 'height_mm');
+
+    If MarginStr <> '' Then
+    Begin
+        N := 0;
+        Try N := Board.BoardOutline.PointCount; Except N := 0; End;
+        If N < 3 Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'NO_OUTLINE', 'The board has no outline to fit the sheet to');
+            Exit;
+        End;
+        MinX := 1e30;  MinY := 1e30;
+        MaxX := -1e30; MaxY := -1e30;
+        For I := 0 To N - 1 Do
+        Begin
+            Vx := Board.BoardOutline.Segments[I].vx * 1.0;
+            Vy := Board.BoardOutline.Segments[I].vy * 1.0;
+            If Vx < MinX Then MinX := Vx;
+            If Vx > MaxX Then MaxX := Vx;
+            If Vy < MinY Then MinY := Vy;
+            If Vy > MaxY Then MaxY := Vy;
+        End;
+        Margin := StrToFloatDef(MarginStr, 0) * 1.0;
+        NewX := Round(MinX) - MMToCoord(Margin);
+        NewY := Round(MinY) - MMToCoord(Margin);
+        NewW := (Round(MaxX) - Round(MinX)) + 2 * MMToCoord(Margin);
+        NewH := (Round(MaxY) - Round(MinY)) + 2 * MMToCoord(Margin);
+    End
+    Else If (XStr <> '') And (YStr <> '') And (WStr <> '') And (HStr <> '') Then
+    Begin
+        NewX := MMToCoord(StrToFloatDef(XStr, 0));
+        NewY := MMToCoord(StrToFloatDef(YStr, 0));
+        NewW := MMToCoord(StrToFloatDef(WStr, 0));
+        NewH := MMToCoord(StrToFloatDef(HStr, 0));
+    End
+    Else
+    Begin
+        Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS',
+            'Give fit_margin_mm, or all of x_mm, y_mm, width_mm, height_mm');
+        Exit;
+    End;
+
+    PCBServer.PreProcess;
+    Try
+        Sheet := Board.PCBSheet;
+        Sheet.SheetX := NewX;
+        Sheet.SheetY := NewY;
+        Sheet.SheetWidth := NewW;
+        Sheet.SheetHeight := NewH;
+        Board.GraphicallyInvalidate;
+    Finally
+        PCBServer.PostProcess;
+    End;
+
+    GotX := Sheet.SheetX;
+    GotY := Sheet.SheetY;
+    GotW := Sheet.SheetWidth;
+    GotH := Sheet.SheetHeight;
+
+    MarkDocDirtyByPath(Board.FileName);
+
+    Result := BuildSuccessResponse(RequestId,
+        '{"success":true,'
+        + '"x_mm":' + FloatToJsonStr(CoordToMM(GotX)) + ','
+        + '"y_mm":' + FloatToJsonStr(CoordToMM(GotY)) + ','
+        + '"width_mm":' + FloatToJsonStr(CoordToMM(GotW)) + ','
+        + '"height_mm":' + FloatToJsonStr(CoordToMM(GotH)) + ','
+        + '"verified":' + BoolToJsonStr((GotX = NewX) And (GotY = NewY)
+            And (GotW = NewW) And (GotH = NewH)) + '}');
+End;
+
+{..............................................................................}
+{ Design > Board Shape > Define Board Shape from Selected Objects.            }
+{ Params: layer (optional): select exactly the tracks and arcs on that layer  }
+{ first (everything else of those kinds is deselected); without it the        }
+{ current selection is used. Runs PCB:PlaceBoardOutline with                  }
+{ Mode=BOARDOUTLINE_FROM_SEL_PRIMS, the call the panel tools already use.     }
+{..............................................................................}
+
+Function PCB_DefineBoardShapeFromSelection(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Iter : IPCB_BoardIterator;
+    Obj : IPCB_Primitive;
+    LayerStr : String;
+    L : TLayer;
+    NSel, N : Integer;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    LayerStr := ExtractJsonValue(Params, 'layer');
+    NSel := 0;
+    If LayerStr <> '' Then
+    Begin
+        L := ResolveLayerId(Board, LayerStr);
+        If L = eNoLayer Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'UNKNOWN_LAYER',
+                'Unknown layer name: ' + LayerStr + '. ' + BoardLayerNamesHint(Board));
+            Exit;
+        End;
+        Iter := Board.BoardIterator_Create;
+        Iter.AddFilter_ObjectSet(MkSet(eTrackObject, eArcObject));
+        Iter.AddFilter_LayerSet(AllLayers);
+        Iter.AddFilter_Method(eProcessAll);
+        Try
+            Obj := Iter.FirstPCBObject;
+            While Obj <> Nil Do
+            Begin
+                If Obj.Layer = L Then
+                Begin
+                    Obj.Selected := True;
+                    Inc(NSel);
+                End
+                Else Obj.Selected := False;
+                Obj := Iter.NextPCBObject;
+            End;
+        Finally
+            Board.BoardIterator_Destroy(Iter);
+        End;
+        If NSel = 0 Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'NO_CONTENT',
+                'No tracks or arcs on layer ' + LayerStr + ' to define the board shape from');
+            Exit;
+        End;
+    End;
+
+    ResetParameters;
+    AddStringParameter('Mode', 'BOARDOUTLINE_FROM_SEL_PRIMS');
+    RunProcess('PCB:PlaceBoardOutline');
+
+    N := 0;
+    Try N := Board.BoardOutline.PointCount; Except N := 0; End;
+    MarkDocDirtyByPath(Board.FileName);
+    Result := BuildSuccessResponse(RequestId,
+        '{"success":true,"selected":' + IntToStr(NSel)
+        + ',"outline_vertices":' + IntToStr(N) + '}');
+End;
+
+{..............................................................................}
+{ Design > Board Shape > Create Primitives From Board Shape.                   }
+{ Params: layer (default "Mechanical 1"), width_mm (default 0.1). One track    }
+{ per outline edge, closing back to the first vertex; arc edges become chords. }
+{..............................................................................}
+
+Function PCB_CreatePrimitivesFromBoardShape(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Trk : IPCB_Track;
+    LayerStr, WStr : String;
+    L : TLayer;
+    I, J, N, NArc, X1c, Y1c, X2c, Y2c, WidthC : Integer;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    LayerStr := ExtractJsonValue(Params, 'layer');
+    If LayerStr = '' Then LayerStr := 'Mechanical 1';
+    WStr := ExtractJsonValue(Params, 'width_mm');
+    If WStr = '' Then WStr := '0.1';
+    WidthC := MMToCoord(StrToFloatDef(WStr, 0.1));
+    L := ResolveLayerId(Board, LayerStr);
+    If L = eNoLayer Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'UNKNOWN_LAYER',
+            'Unknown layer name: ' + LayerStr + '. ' + BoardLayerNamesHint(Board));
+        Exit;
+    End;
+
+    N := 0;
+    Try N := Board.BoardOutline.PointCount; Except N := 0; End;
+    If N < 3 Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_OUTLINE', 'The board has no outline');
+        Exit;
+    End;
+
+    NArc := 0;
+    PCBServer.PreProcess;
+    Try
+        For I := 0 To N - 1 Do
+        Begin
+            If I = N - 1 Then J := 0 Else J := I + 1;
+            X1c := Board.BoardOutline.Segments[I].vx;
+            Y1c := Board.BoardOutline.Segments[I].vy;
+            X2c := Board.BoardOutline.Segments[J].vx;
+            Y2c := Board.BoardOutline.Segments[J].vy;
+            If Board.BoardOutline.Segments[I].Kind <> ePolySegmentLine Then Inc(NArc);
+            Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
+            Trk.Layer := L;
+            Trk.Width := WidthC;
+            Trk.x1 := X1c;
+            Trk.y1 := Y1c;
+            Trk.x2 := X2c;
+            Trk.y2 := Y2c;
+            Board.AddPCBObject(Trk);
+            PCBServer.SendMessageToRobots(Board.I_ObjectAddress, c_Broadcast,
+                PCBM_BoardRegisteration, Trk.I_ObjectAddress);
+        End;
+    Finally
+        PCBServer.PostProcess;
+    End;
+
+    MarkDocDirtyByPath(Board.FileName);
+    Result := BuildSuccessResponse(RequestId,
+        '{"success":true,"tracks":' + IntToStr(N)
+        + ',"arc_edges_as_chords":' + IntToStr(NArc)
+        + ',"layer":"' + EscapeJsonString(GetLayerString(L)) + '"}');
+End;
+
+{..............................................................................}
+{ Design > Board Shape > Define Board Cutout, from a polygon.                  }
+{ Params: points_mm="x,y;x,y;..." (>= 3 vertices, board coordinates, mm).      }
+{ Creates a region and sets its Kind to board cutout. Assigning Kind is        }
+{ unproven in this codebase (see PCBGeneric.pas), so the kind is read back.    }
+{..............................................................................}
+
+Function PCB_AddBoardCutout(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Region : IPCB_Region;
+    Seg : TPolySegment;
+    Pts, Remaining, Pair : String;
+    SemiPos, CommaPos, N, K : Integer;
+    Xs, Ys : TStringList;
+    IsCut : Boolean;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    Pts := ExtractJsonValue(Params, 'points_mm');
+    If Pts = '' Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'points_mm is required: "x,y;x,y;..." in mm');
+        Exit;
+    End;
+
+    Xs := TStringList.Create;
+    Ys := TStringList.Create;
+    Try
+        Remaining := Pts;
+        While Remaining <> '' Do
+        Begin
+            SemiPos := Pos(';', Remaining);
+            If SemiPos > 0 Then
+            Begin
+                Pair := Copy(Remaining, 1, SemiPos - 1);
+                Remaining := Copy(Remaining, SemiPos + 1, Length(Remaining));
+            End
+            Else
+            Begin
+                Pair := Remaining;
+                Remaining := '';
+            End;
+            If Pair <> '' Then
+            Begin
+                CommaPos := Pos(',', Pair);
+                If CommaPos < 2 Then
+                Begin
+                    Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'Bad vertex "' + Pair + '", expected x,y');
+                    Exit;
+                End;
+                Xs.Add(Copy(Pair, 1, CommaPos - 1));
+                Ys.Add(Copy(Pair, CommaPos + 1, Length(Pair)));
+            End;
+        End;
+
+        N := Xs.Count;
+        If N < 3 Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'At least 3 vertices are required');
+            Exit;
+        End;
+
+        IsCut := False;
+        PCBServer.PreProcess;
+        Try
+            Region := PCBServer.PCBObjectFactory(eRegionObject, eNoDimension, eCreate_Default);
+            If Region = Nil Then
+            Begin
+                Result := BuildErrorResponse(RequestId, 'CREATE_FAILED', 'Failed to create region object');
+                Exit;
+            End;
+            Region.Layer := eTopLayer;
+            For K := 1 To N Do
+            Begin
+                Seg := TPolySegment;
+                Seg.Kind := ePolySegmentLine;
+                Seg.vx := MMToCoord(StrToFloatDef(Xs.Strings[K - 1], 0));
+                Seg.vy := MMToCoord(StrToFloatDef(Ys.Strings[K - 1], 0));
+                Region.ShapeSegmentCount := K;
+                Region.ShapeSegments[K - 1] := Seg;
+            End;
+            Region.UpdateContourFromShape(True);
+            Region.Kind := eRegionKind_BoardCutout;
+            Board.AddPCBObject(Region);
+            PCBServer.SendMessageToRobots(Board.I_ObjectAddress, c_Broadcast,
+                PCBM_BoardRegisteration, Region.I_ObjectAddress);
+            IsCut := (Region.Kind = eRegionKind_BoardCutout);
+        Finally
+            PCBServer.PostProcess;
+        End;
+    Finally
+        Xs.Free;
+        Ys.Free;
+    End;
+
+    MarkDocDirtyByPath(Board.FileName);
+    Result := BuildSuccessResponse(RequestId,
+        '{"success":true,"vertices":' + IntToStr(N)
+        + ',"board_cutout":' + BoolToJsonStr(IsCut) + '}');
 End;
 
 {..............................................................................}
@@ -17680,6 +18535,7 @@ Begin
         'add_layer':               Result := PCB_AddLayer(Params, RequestId);
         'remove_layer':            Result := PCB_RemoveLayer(Params, RequestId);
         'modify_layer':            Result := PCB_ModifyLayer(Params, RequestId);
+        'import_layer_stack':      Result := PCB_ImportLayerStack(Params, RequestId);
         'set_plane_net':           Result := PCB_SetPlaneNet(Params, RequestId);
         'set_mech_layer_kind':     Result := PCB_SetMechLayerKind(Params, RequestId);
         'set_mech_layers':         Result := PCB_SetMechLayers(Params, RequestId);
@@ -17724,6 +18580,11 @@ Begin
         'get_board_statistics':    Result := PCB_GetBoardStatistics(Params, RequestId);
         'export_coordinates':      Result := PCB_ExportCoordinates(Params, RequestId);
         'set_board_shape':         Result := PCB_SetBoardShape(Params, RequestId);
+        'set_board_outline':       Result := PCB_SetBoardOutline(Params, RequestId);
+        'set_sheet_position':      Result := PCB_SetSheetPosition(Params, RequestId);
+        'define_board_shape_from_selection': Result := PCB_DefineBoardShapeFromSelection(Params, RequestId);
+        'create_primitives_from_board_shape': Result := PCB_CreatePrimitivesFromBoardShape(Params, RequestId);
+        'add_board_cutout':        Result := PCB_AddBoardCutout(Params, RequestId);
         'place_polygon_rect':      Result := PCB_PlacePolygonRect(Params, RequestId);
         'place_via_array':         Result := PCB_PlaceViaArray(Params, RequestId);
         'create_diff_pair':        Result := PCB_CreateDiffPair(Params, RequestId);

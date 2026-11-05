@@ -399,7 +399,7 @@ def _registered_tools(backend: str) -> set:
     try:
         from ..tools import register_backend
 
-        register_backend(_Mcp(), backend)
+        register_backend(_Mcp(), backend, "full")
     except Exception:                                # noqa: BLE001
         # A guide naming every tool beats one naming none, so an
         # unexpected registration failure falls back to no filtering.

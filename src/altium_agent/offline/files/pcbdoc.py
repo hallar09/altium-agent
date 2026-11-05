@@ -14,7 +14,9 @@ convention).
 
 from __future__ import annotations
 
+import copy
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -51,7 +53,16 @@ COPPER_LEGACY = set(range(1, 33)) | set(range(39, 55))
 
 RULE_UNITS_KEYS = ("GAP", "MINLIMIT", "MAXLIMIT", "PREFEREDWIDTH", "MINWIDTH", "MAXWIDTH",
                    "MINHOLEWIDTH", "MAXHOLEWIDTH", "PREFEREDHOLEWIDTH", "MINRING", "EXPANSION",
-                   "CLEARANCE", "MINIMUM", "RELIEFAIRGAP", "RELIEFCONDUCTORWIDTH", "MINSOLDERMASKWIDTH")
+                   "CLEARANCE", "MINIMUM", "RELIEFAIRGAP", "RELIEFCONDUCTORWIDTH", "MINSOLDERMASKWIDTH",
+                   # Routing Via sizes, the pair rule's gap and uncoupled length, polygon
+                   # and plane relief: none of these were read, so no tool could show
+                   # what a pair or via rule held (SODIMM, 2026-11).
+                   "WIDTH", "HOLEWIDTH", "MOSTFREQGAP", "MAXUNCOUPLEDLENGTH", "AIRGAPWIDTH",
+                   "RELIEFEXPANSION")
+
+#: Non-length rule settings worth showing as they are.
+RULE_SETTING_KEYS = ("CONNECTSTYLE", "PLANECONNECTSTYLE", "RELIEFENTRIES", "VIASTYLE", "NETSCOPE",
+                     "ENFORCE", "POLYGONRELIEFANGLE")
 
 
 def layer_name(layer_id: int) -> str:
@@ -298,33 +309,7 @@ class PcbDocument:
     def outline_poly(self) -> list[tuple[float, float]]:
         """The board outline as a polygon, arcs expanded into short segments (<= 5 degrees). Use this, not the
         raw vertices: a round or rounded board joined vertex to vertex is a different shape."""
-        out = []
-        verts = self.outline_mm
-        for i, v in enumerate(verts):
-            out.append((v["x"], v["y"]))
-            if v.get("arc") and "start_angle" in v and v.get("radius"):
-                cx, cy = v["center"]
-                r, sa, ea = v["radius"], v["start_angle"], v["end_angle"]
-                sweep = (ea - sa) % 360.0 or 360.0  # Altium: counter-clockwise from sa to ea
-                # the outline may run either way round: walk the arc from this vertex towards the next one
-                a0 = math.degrees(math.atan2(v["y"] - cy, v["x"] - cx))
-                nxt = verts[(i + 1) % len(verts)]
-                a1 = math.degrees(math.atan2(nxt["y"] - cy, nxt["x"] - cx))
-
-                def near(a, b):
-                    return abs((a - b + 180.0) % 360.0 - 180.0) < 1.0
-                if near(a0, ea) and near(a1, sa):  # traversed clockwise: from ea back to sa
-                    start, step = ea, -sweep
-                elif near(a0, sa):
-                    start, step = sa, sweep
-                else:  # angles not stored consistently: go the short way from this vertex to the next
-                    d = (a1 - a0 + 180.0) % 360.0 - 180.0
-                    start, step = a0, d
-                n = max(2, int(abs(step) / 5.0))
-                for k in range(1, n):
-                    a = math.radians(start + step * k / n)
-                    out.append((round(cx + r * math.cos(a), 4), round(cy + r * math.sin(a), 4)))
-        return out
+        return expand_arcs(self.outline_mm)
 
     def outline_bbox(self) -> dict | None:
         if not self.outline_mm:
@@ -448,13 +433,56 @@ def _stack(board: dict[str, str]) -> list[StackLayer]:
             lyr.dielectric_height_mm = mil_to_mm(parse_length_mil(g("DIELHEIGHT")))
             lyr.dielectric_constant = parse_float(g("DIELCONST"), 0.0) or None
             lyr.dielectric_material = g("DIELMATERIAL") or ""
-            lyr.dielectric_type = {"0": "core", "1": "prepreg", "2": "surface", "3": "surface"}.get(
-                g("DIELTYPE") or "", g("DIELTYPE") or "")
+            # Altium's own codes, read off boards Altium saved (Kame_FMU:
+            # Core-009 is 1, PP-006 is 2, Solder Resist is 3). The old table
+            # was one off (0 read as core), which made pcb_modify_layer look
+            # off by one and led agents to "correct" good stacks into bad
+            # ones: prepregs saved as core, cores saved as none.
+            lyr.dielectric_type = DIELTYPE_NAMES.get(g("DIELTYPE") or "", g("DIELTYPE") or "")
         layers.append(lyr)
     return layers
 
 
+#: Altium's DIELTYPE codes in the board record, by name. The inverse is
+#: what pcb_import_layer_stack writes.
+DIELTYPE_NAMES = {"0": "none", "1": "core", "2": "prepreg", "3": "surface"}
+DIELTYPE_CODES = {v: k for k, v in DIELTYPE_NAMES.items()}
+
+
+def expand_arcs(verts: list[dict]) -> list[tuple[float, float]]:
+    """Outline vertices (``x``, ``y``, and for an arc ``arc``, ``center``, ``radius``, ``start_angle``,
+    ``end_angle``) as a polygon, each arc walked in steps of at most 5 degrees."""
+    out = []
+    for i, v in enumerate(verts):
+        out.append((v["x"], v["y"]))
+        if v.get("arc") and "start_angle" in v and v.get("radius"):
+            cx, cy = v["center"]
+            r, sa, ea = v["radius"], v["start_angle"], v["end_angle"]
+            sweep = (ea - sa) % 360.0 or 360.0  # Altium: counter-clockwise from sa to ea
+            # the outline may run either way round: walk the arc from this vertex towards the next one
+            a0 = math.degrees(math.atan2(v["y"] - cy, v["x"] - cx))
+            nxt = verts[(i + 1) % len(verts)]
+            a1 = math.degrees(math.atan2(nxt["y"] - cy, nxt["x"] - cx))
+
+            def near(a, b):
+                return abs((a - b + 180.0) % 360.0 - 180.0) < 1.0
+            if near(a0, ea) and near(a1, sa):  # traversed clockwise: from ea back to sa
+                start, step = ea, -sweep
+            elif near(a0, sa):
+                start, step = sa, sweep
+            else:  # angles not stored consistently: go the short way from this vertex to the next
+                d = (a1 - a0 + 180.0) % 360.0 - 180.0
+                start, step = a0, d
+            n = max(2, int(abs(step) / 5.0))
+            for k in range(1, n):
+                a = math.radians(start + step * k / n)
+                out.append((round(cx + r * math.cos(a), 4), round(cy + r * math.sin(a), 4)))
+    return out
+
+
 def _outline(board: dict[str, str], ox: float, oy: float) -> list[dict]:
+    """The vertices of an outline record (the board's, or a polygon pour's): ``VXn``/``VYn``, and
+    ``KINDn`` = 1 for an arc from vertex n to the next, with its centre, radius and angles."""
     pts = []
     i = 0
     while f"VX{i}" in board:
@@ -657,12 +685,8 @@ def _decode_codes(value: str) -> str:
 
 
 def _polygon_outline(pp: dict[str, str], ox: float, oy: float) -> list[list[float]]:
-    pts, i = [], 0
-    while f"VX{i}" in pp:
-        pts.append([round(mil_to_mm(parse_length_mil(pp[f"VX{i}"]) - ox), 4),
-                    round(mil_to_mm(parse_length_mil(pp[f"VY{i}"]) - oy), 4)])
-        i += 1
-    return pts
+    """A pour's outline, its arcs expanded: a pour drawn with arcs joined vertex to vertex is a sliver."""
+    return [[round(x, 4), round(y, 4)] for x, y in expand_arcs(_outline(pp, ox, oy))]
 
 
 def _component_texts(raw: bytes) -> tuple[dict[int, str], dict[int, str]]:
@@ -697,6 +721,21 @@ def _component_texts(raw: bytes) -> tuple[dict[int, str], dict[int, str]]:
 def read_pcbdoc(path: Path, *, primitives: bool = True) -> PcbDocument:
     path = Path(path)
     st = path.stat()
+    if os.environ.get("ALTIUM_AGENT_BENCH_MASK"):
+        # A benchmark task: the copy is shown stripped (altium_agent.bench.mask).
+        from ...bench import mask
+
+        entry = mask.entry_for(path)
+        if entry is not None:
+            # Always from the full read: where staged parts go depends on
+            # their pads, and every tool must see the same board. A shallow
+            # copy is enough, as the transforms never edit the cached lists.
+            full = _read_cached(str(path.resolve()), st.st_mtime_ns, st.st_size, True)
+            doc = mask.apply(copy.copy(full), entry)
+            if not primitives:
+                for attr in ("tracks", "arcs", "vias", "pads", "fills", "texts", "regions"):
+                    setattr(doc, attr, [])
+            return doc
     return _read_cached(str(path.resolve()), st.st_mtime_ns, st.st_size, primitives)
 
 
@@ -764,8 +803,18 @@ def _parse(path: Path, primitives: bool) -> PcbDocument:
             for k in RULE_UNITS_KEYS:
                 if k in rp:
                     values[k.lower() + "_mm"] = round(mil_to_mm(parse_length_mil(rp[k])), 5)
+            # A pair rule keeps its WIDTHS per layer (TOPLAYER_MINWIDTH ...),
+            # not in the keys above; the top layer stands for all of them
+            # the way pcb_create_design_rule writes them.
+            for src, dst in (("TOPLAYER_MINWIDTH", "dp_min_width_mm"), ("TOPLAYER_MAXWIDTH", "dp_max_width_mm"),
+                             ("TOPLAYER_PREFWIDTH", "dp_pref_width_mm")):
+                if src in rp:
+                    values[dst] = round(mil_to_mm(parse_length_mil(rp[src])), 5)
             if values:
                 rule["values"] = values
+            settings = {k.lower(): rp[k] for k in RULE_SETTING_KEYS if k in rp}
+            if settings:
+                rule["settings"] = settings
             rules.append(rule)
 
         polygons = []

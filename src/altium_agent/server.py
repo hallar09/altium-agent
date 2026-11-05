@@ -112,7 +112,8 @@ ACTIVE_BACKEND = os.environ.get("ALTIUM_AGENT_BACKEND", DEFAULT_BACKEND)
 # Some MCP clients cap tool count or stall serializing hundreds of schemas
 # at startup. ALTIUM_AGENT_TOOLSET=minimal advertises only tool_catalog and
 # tool_invoke while keeping every other tool reachable through them. The
-# default stays "full" so existing installs are unaffected.
+# default is "core": the ~95 tools a design run uses, the rest one
+# tool_invoke away. "full" advertises all of them (~150k tokens of schemas).
 ACTIVE_TOOLSET = os.environ.get("ALTIUM_AGENT_TOOLSET", DEFAULT_TOOLSET)
 
 # WHY THERE ARE SERVER INSTRUCTIONS AT ALL.
@@ -223,7 +224,9 @@ def build_server_instructions(
         "\n"
         + ui
         + engine +
-        "Coordinates are in mils throughout, on every backend.\n"
+        "Units are in the parameter name: x_mm and width_mm take\n"
+        "millimetres, *_mils takes mils. A coordinate or size with no\n"
+        "unit in its name is in mils, the unit of the inherited tools.\n"
     )
 
 

@@ -101,7 +101,7 @@ def _registered() -> set[str]:
                     return fn
                 return deco
 
-        register_backend(_Mcp(), backend)
+        register_backend(_Mcp(), backend, "full")
         names |= set(captured)
     return names
 

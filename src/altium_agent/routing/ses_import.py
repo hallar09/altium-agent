@@ -3,14 +3,13 @@
 # From altium-mcp-pro tools/routing.py (_apply_ses). Modified for Altium Agent
 # (2026): pure conversion to the eda-agent bridge's pcb.place_tracks /
 # pcb.place_vias rows, in absolute mils; see docs/PROVENANCE.md.
-"""Turn a Freerouting session (SES) into bridge rows, without touching Altium.
+"""Turn a Specctra session (SES) into bridge rows, without touching Altium.
 
 The SES holds the whole board's wiring, the copper that was already there
 (exported as protected wiring) included. Rows are made only for copper that
 is new: a track or via that matches existing copper within 10 um is
-skipped, so importing never doubles hand routing. Freerouting necks tracks
-down at pads; a track narrower than its net's minimum width is widened back
-to it. Tracks on internal plane layers are dropped (in Altium a track on a
+skipped, so importing never doubles hand routing. A track narrower than its
+net's minimum width is widened back to it. Tracks on internal plane layers are dropped (in Altium a track on a
 plane layer is a split line).
 """
 
@@ -33,6 +32,17 @@ def layer_token(legacy_id: int) -> str:
     return f"MidLayer{legacy_id - 1}"
 
 
+def via_span_tokens(layers: list[str], layer_map: dict[str, int]) -> tuple[str, str]:
+    """The low and high layer of a via whose padstack has copper on
+    ``layers``: Top to Bottom unless it is a strict sub-span of the stack
+    (``layer_map`` is in stack order), then its outermost two."""
+    order = [n for n in layer_map if layer_map[n] <= 32]
+    on = [n for n in order if n in set(layers)]
+    if len(on) < 2 or (on[0] == order[0] and on[-1] == order[-1]):
+        return "TopLayer", "BottomLayer"
+    return layer_token(layer_map[on[0]]), layer_token(layer_map[on[-1]])
+
+
 def _num(v: float) -> str:
     s = f"{v:.4f}".rstrip("0").rstrip(".")
     return s if s not in ("", "-0") else "0"
@@ -42,6 +52,7 @@ def _num(v: float) -> str:
 class SesRows:
     tracks: list[str] = field(default_factory=list)   # x1,y1,x2,y2,width,layer,net (mils)
     vias: list[str] = field(default_factory=list)     # x,y,size,hole,low,high,net (mils)
+    spanned_vias: int = 0                              # blind/buried: low/high not Top/Bottom
     nets: set = field(default_factory=set)
     skipped_existing: int = 0
     widths_clamped: int = 0
@@ -51,6 +62,7 @@ class SesRows:
 
     def summary(self) -> dict:
         return {"tracks": len(self.tracks), "vias": len(self.vias), "nets": len(self.nets),
+                "spanned_vias": self.spanned_vias,
                 "skipped_existing": self.skipped_existing, "widths_clamped": self.widths_clamped,
                 "plane_tracks_dropped": self.plane_tracks_dropped, "other_nets_dropped": self.other_nets_dropped,
                 "bad_net_names": self.bad_net_names}
@@ -124,8 +136,11 @@ def ses_rows(ses: Path, layer_map: dict[str, int], rules: dict, origin_mil: tupl
             out.bad_net_names.append(v["net"])
             continue
         x, y = mil(v["x"], v["y"])
+        low, high = via_span_tokens(v.get("layers") or [], layer_map)
+        if (low, high) != ("TopLayer", "BottomLayer"):
+            out.spanned_vias += 1
         out.vias.append(",".join([_num(x), _num(y), _num(v["diameter"] * MILS_PER_MM),
-                                  _num(v["hole"] * MILS_PER_MM), "TopLayer", "BottomLayer", v["net"]]))
+                                  _num(v["hole"] * MILS_PER_MM), low, high, v["net"]]))
         out.nets.add(v["net"])
     out.bad_net_names = sorted(set(out.bad_net_names))
     return out

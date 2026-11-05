@@ -157,6 +157,27 @@ def _antennas(fps, descriptions: dict[str, str], answers: dict | None) -> tuple[
     return keep, questions
 
 
+def unknown_keep(fps, keep) -> list[str]:
+    """The ``keep`` designators that are not on the board (case-insensitive)."""
+    have = {f.ref.upper() for f in fps}
+    return [str(r) for r in (keep or []) if str(r).upper() not in have]
+
+
+def did_you_mean(fps, names: list[str]) -> dict[str, list[str]]:
+    """For each unknown name, the designators it was probably meant to be:
+    those it is a word of (``BOT1`` for ``Altium Logo BOT1``), else the
+    closest spellings."""
+    import difflib
+
+    refs = [f.ref for f in fps]
+    out: dict[str, list[str]] = {}
+    for name in names:
+        n = name.upper()
+        word = [r for r in refs if n in r.upper().replace("_", " ").replace("-", " ").split()]
+        out[name] = word or difflib.get_close_matches(name, refs, n=3, cutoff=0.6)
+    return out
+
+
 def place_plan(project: str | None = None, pcb: str | None = None, levers: dict | None = None,
                profile: Any = None, antennas: dict | None = None, keep_outline: bool = True,
                name: str | None = None) -> dict:
@@ -174,6 +195,14 @@ def place_plan(project: str | None = None, pcb: str | None = None, levers: dict 
         prof = load_profile(profile)
         lev.update(prof.get("levers") or {})
     lev.update(levers or {})
+    unknown = unknown_keep(fps, lev.get("keep"))
+    if unknown:
+        # Placing anyway would MOVE the part the caller meant to hold still,
+        # and nothing in the plan would say so.
+        return {"ok": False, "error": f"keep names {len(unknown)} part(s) that are not on the board: "
+                                      f"{', '.join(unknown)}; nothing was placed",
+                "unknown_keep": unknown, "did_you_mean": did_you_mean(fps, unknown),
+                "hint": "Pass the exact designators (pcb_read_components lists them) and plan again."}
     outline = None
     poly = list(b.doc.outline_poly or [])
     if keep_outline:

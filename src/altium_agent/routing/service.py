@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The routing broker's file side, as the route_ tools call it (Altium Agent).
 
-Plain functions: read the saved board, plan, export DSN, run Freerouting
-(external), turn its SES into bridge rows, check vias. Only the tool layer
-talks to Altium.
+Plain functions: read the saved board, plan, fan power out, turn an SES
+(a fan-out's, a routing session's) into bridge rows, check vias. Only the
+tool layer talks to Altium.
 """
 
 from __future__ import annotations
@@ -17,10 +17,9 @@ from ..offline.context import output_dir_for
 from ..offline.errors import InvalidArgument
 from ..offline.files.pcbdoc import PcbDocument, read_pcbdoc
 from ..placement.service import is_protected_design, load_board, load_profile
-from . import freerouting as fr
 from .broker import ENGINES
 from .broker import plan as broker_plan
-from .specctra import DsnOptions, export_dsn
+from .specctra import import_rules, layer_map
 
 
 def _owner(doc: PcbDocument, project: Path | None) -> Path:
@@ -32,52 +31,25 @@ def routing_dir(doc: PcbDocument, project: Path | None = None) -> Path:
 
 
 def engines_status() -> dict:
-    f = fr.find()
     return {
-        "inhouse": {"available": True, "how": "pcb_autoroute (reads the focused board live), pcb_autoroute_apply"},
-        "freerouting": ({"available": f.usable, **f.to_dict()} if f else
-                        {"available": False, "searched": [str(d) for d in fr.search_dirs()],
-                         "hint": "Freerouting is GPL-3.0 and is not shipped; install it yourself and set "
-                                 "ALTIUM_AGENT_FREEROUTING (a jar, with ALTIUM_AGENT_JAVA, or a native build)."}),
+        "inhouse": {"available": True,
+                    "how": "route_session_route (the saved board, net by net, as the agent directs); "
+                           "pcb_autoroute and pcb_autoroute_apply on the live board"},
         "altium": {"available": True,
                    "how": "Situs via route_situs (no dialog; the board's own strategy) as the finisher; the "
                           "interactive router is used by you in Altium, and the broker reads the saved result"},
     }
 
 
-POLICY_FILE = "altium_agent.json"
-
-
-def project_policy(folder: Path) -> dict:
-    """The project's own settings: ``altium_agent.json`` beside the .PrjPcb.
-
-    ``{"routing": {"third_party_engines": false}}`` keeps third-party routing
-    engines (Freerouting) out of this project; absent, they are allowed when
-    installed. The file is the user's; Altium Agent only reads it.
-    """
-    p = Path(folder) / POLICY_FILE
-    if not p.is_file():
-        return {"source": None, "third_party_engines": True}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise InvalidArgument(f"{p} is not valid JSON: {exc}") from exc
-    r = data.get("routing") or {}
-    return {"source": str(p), "third_party_engines": bool(r.get("third_party_engines", True))}
-
-
 def route_broker_plan(project: str | None = None, pcb: str | None = None, profile: Any = None,
-                      engines: list[str] | None = None, batch_size: int = 0, max_passes: int = 50,
-                      name: str | None = None, reference: str | None = None) -> dict:
+                      engines: list[str] | None = None, name: str | None = None,
+                      reference: str | None = None) -> dict:
     bad = [e for e in (engines or []) if e not in ENGINES]
     if bad:
         raise InvalidArgument(f"unknown engine(s) {bad}; known: {list(ENGINES)}")
     b = load_board(project, pcb)
     prof = load_profile(profile) if profile is not None else None
-    policy = project_policy((b.project or b.doc.path).parent)
     engines = list(engines or ENGINES)
-    if not policy["third_party_engines"] and "freerouting" in engines:
-        engines.remove("freerouting")
     ref_doc = None
     ref_path = reference or (prof.get("source") if prof else None)
     if ref_path and Path(ref_path).suffix.lower() == ".pcbdoc" and Path(ref_path).is_file():
@@ -85,13 +57,7 @@ def route_broker_plan(project: str | None = None, pcb: str | None = None, profil
     elif reference:
         ref_doc = load_board(reference if reference.lower().endswith(".prjpcb") else None,
                              None if reference.lower().endswith(".prjpcb") else reference).doc
-    f = fr.find()
-    p = broker_plan(b.doc, engines=engines, freerouting_ready=bool(f and f.usable), batch_size=batch_size,
-                    profile=prof, max_passes=max_passes, reference=ref_doc)
-    p["policy"] = policy
-    if not policy["third_party_engines"]:
-        p["notes"].insert(0, f"The project's policy ({policy['source']}) forbids third-party engines: "
-                             "no Freerouting.")
+    p = broker_plan(b.doc, engines=engines, profile=prof, reference=ref_doc)
     p["created"] = _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
     p["project"] = str(b.project) if b.project else None
     if is_protected_design(p["source"]):
@@ -119,41 +85,32 @@ def load_plan(plan: Any) -> tuple[dict, Path | None]:
     return data, path
 
 
-def dsn_options(route_only: list[str] | None, keep_existing: bool, track_width_mm=None, clearance_mm=None,
-                via_diameter_mm=None, via_hole_mm=None, route_layers=None, skip_nets=None,
-                net_widths_mm=None) -> DsnOptions:
-    return DsnOptions(track_width_mm=track_width_mm, clearance_mm=clearance_mm, via_diameter_mm=via_diameter_mm,
-                      via_hole_mm=via_hole_mm, route_layers=route_layers, skip_nets=list(skip_nets or []),
-                      net_widths_mm=dict(net_widths_mm or {}), keep_existing=keep_existing,
-                      route_only=list(route_only) if route_only else None)
+def with_prior_routing(doc: PcbDocument, jobs: list[dict]) -> PcbDocument:
+    """``doc`` with the copper of earlier jobs (a fan-out, a session export)
+    on it, as if imported: so a later step can build on them without Altium.
+    In Altium, import the earlier job and save instead."""
+    import copy
 
+    from ..offline.files.pcbdoc import NONE16, Track, Via
+    from .specctra import parse_ses
 
-def export(pcb_path: str, opts: DsnOptions, tag: str = "") -> dict:
-    """Write the DSN for a saved board into its routing folder."""
-    doc = read_pcbdoc(Path(pcb_path))
-    e = export_dsn(doc, opts)
-    work = routing_dir(doc)
-    stem = doc.path.stem + (f"-{tag}" if tag else "")
-    dsn = work / f"{stem}.dsn"
-    dsn.write_text(e.text, encoding="utf-8")
-    return {"dsn": str(dsn), "ses": str(work / f"{stem}.ses"), "nets": e.nets, "components": e.components,
-            "layer_map": e.layer_map, "rules": e.rules, "origin_mil": list(doc.origin_mil),
-            "source": str(doc.path)}
-
-
-def freerouting_job(params: dict) -> dict:
-    """The job body: run Freerouting on an exported DSN (blocks in a worker thread)."""
-    run = fr.run(Path(params["dsn"]), Path(params["ses"]), max_passes=params.get("max_passes", 50),
-                 timeout_s=params.get("timeout_s", 1200), optimize=params.get("optimize", False),
-                 extra=tuple(params.get("extra") or ()))
-    out = {**params, "freerouting": run}
-    meta = Path(params["ses"]).with_suffix(".job.json")
-    meta.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    out = copy.copy(doc)
+    out.tracks, out.vias = list(doc.tracks), list(doc.vias)
+    index = {n: i for i, n in enumerate(doc.nets)}
+    for job in jobs:
+        if not job.get("ses") or not Path(job["ses"]).exists():
+            raise InvalidArgument(f"job {job.get('job_id', '?')} has no SES to build on")
+        lm, hole = job["layer_map"], job["rules"]["via_hole_mm"]
+        r = parse_ses(Path(job["ses"]), hole)
+        out.tracks += [Track(lm[t["layer"]], index[t["net"]], NONE16, t["x1"], t["y1"], t["x2"], t["y2"], t["width"])
+                       for t in r.tracks if t["net"] in index and lm.get(t["layer"]) in range(1, 33)]
+        out.vias += [Via(index[v["net"]], v["x"], v["y"], v["diameter"], v["hole"], 1, 32)
+                     for v in r.vias if v["net"] in index]
     return out
 
 
 def ses_rows_for(job: dict, only_nets: set[str] | None = None):
-    """Bridge rows for a finished Freerouting job, against the board as saved now."""
+    """Bridge rows for a finished fan-out or session job, against the board as saved now."""
     from .ses_import import ses_rows
 
     doc = read_pcbdoc(Path(job["source"]))
@@ -176,3 +133,38 @@ def tenting_read_back(pcb_path: str, **kw) -> dict:
     from .via_style import read_back
 
     return read_back(read_pcbdoc(Path(pcb_path)), **kw)
+
+
+def fanout_job(params: dict) -> dict:
+    """The fan-out job: plan the vias on the saved board (with ``after``
+    jobs' routing on it), write them as an SES, keep the job record the
+    import reads."""
+    from .fanout import FanoutResult, plan_fanout, plan_stitching, write_ses
+
+    doc = read_pcbdoc(Path(params["source"]))
+    if params.get("after"):
+        doc = with_prior_routing(doc, params["after"])
+    vias = dict(via_diameter_mm=params.get("via_diameter_mm"), via_hole_mm=params.get("via_hole_mm"),
+                clearance_mm=params.get("clearance_mm"))
+    if params.get("pads", True):
+        res = plan_fanout(doc, params.get("nets"), stub_width_mm=params.get("stub_width_mm"),
+                          max_reach_mm=params.get("max_reach_mm", 1.5), **vias)
+    else:
+        res = FanoutResult(nets=sorted(params.get("nets") or []))
+    if params.get("stitch_spacing_mm"):
+        from .fanout import with_result
+
+        st = plan_stitching(with_result(doc, res), params.get("nets"), spacing_mm=params["stitch_spacing_mm"],
+                            **vias)
+        res.vias += st.vias
+        res.rules = {**st.rules, **res.rules}
+        res.nets = res.nets or st.nets
+        res.rules["stitching_vias"] = st.placed
+    lm = layer_map(doc)
+    work = routing_dir(doc)
+    ses = write_ses(res, work / f"{doc.path.stem}-fanout.ses", lm, doc.path.stem)
+    out = {"source": str(doc.path), "origin_mil": list(doc.origin_mil), "ses": str(ses), "layer_map": lm,
+           "rules": {**import_rules(doc), "via_hole_mm": res.rules["via_hole_mm"]}, "route_only": res.nets,
+           "fanout": res.summary()}
+    ses.with_suffix(".job.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+    return out

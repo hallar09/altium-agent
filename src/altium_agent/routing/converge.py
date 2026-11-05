@@ -10,8 +10,8 @@ offender first); the broker adds what it knows and the planner does not:
   locked by the plan, is never removed;
 * an action on a net the plan did not route becomes an escalation: a clash
   with protected copper is for a person to settle;
-* a re-route goes to the other engine than last time (in-house <-> Freerouting),
-  and a net ripped in two rounds already is escalated, not ripped again;
+* a ripped net is re-routed by the in-house engine, and a net ripped in two
+  rounds already is escalated, not ripped again;
 * the rounds are bounded (``max_rounds``, default 3); the state is kept in
   a JSON beside the plan so a later call continues the count.
 """
@@ -45,14 +45,6 @@ def save_state(plan_path: Path | None, state: dict) -> None:
         _state_path(plan_path).write_text(json.dumps(state, indent=1), encoding="utf-8")
 
 
-def _engine_of(plan: dict, net: str) -> str:
-    for s in plan.get("steps") or []:
-        nets = s.get("args", {}).get("nets") or s.get("args", {}).get("route_only") or []
-        if net in nets and s.get("engine") in ("inhouse", "freerouting"):
-            return s["engine"]
-    return "inhouse"
-
-
 def converge(plan: dict, drc: Any, *, plan_path: Path | None = None, max_rounds: int = 3,
              rips_per_round: int = 5) -> dict:
     """The next round of repairs, as steps; ``done`` when nothing is left to do here."""
@@ -61,7 +53,6 @@ def converge(plan: dict, drc: Any, *, plan_path: Path | None = None, max_rounds:
     prot = plan.get("protected") or {}
     full = set(prot.get("routed") or [])
     src = plan.get("source", "")
-    use_fr = bool(plan.get("freerouting"))
 
     # The planner rips the worst offender; a protected net must never be it. Its side of each
     # violation is blanked, so the plan's own net is the one ripped, and a clash with no plan net
@@ -136,27 +127,21 @@ def converge(plan: dict, drc: Any, *, plan_path: Path | None = None, max_rounds:
     if rip:
         step("pcb_unroute", {"expect_file": src, "nets": rip, "include_locked": False, "checkpoint": True},
              f"take up the copper this plan put on {len(rip)} clashing net(s); locked (hand) copper stays")
-        by_engine: dict[str, list[str]] = {"inhouse": [], "freerouting": []}
+        by_engine: dict[str, list[str]] = {"inhouse": []}
         for net in rip:
-            last = state["engine"].get(net) or _engine_of(plan, net)
-            nxt = "freerouting" if last == "inhouse" and use_fr else "inhouse"
-            by_engine[nxt].append(net)
-            state["engine"][net] = nxt
+            by_engine["inhouse"].append(net)
+            state["engine"][net] = "inhouse"
             state["ripped"][net] = state["ripped"].get(net, 0) + 1
         if plan.get("reference_placement") and plan.get("reference"):
             # BoardKit's loop: a clashing net is copied whole from the reference, locked.
             step("route_refcopy", {"expect_file": src, "reference": plan["reference"], "nets": rip},
                  "copy the clashing nets whole from the reference (same part positions), locked",
                  engine="refcopy")
-            by_engine = {"inhouse": [], "freerouting": []}
+            by_engine = {"inhouse": []}
         if by_engine["inhouse"]:
             step("pcb_autoroute", {"expect_file": src, "nets": by_engine["inhouse"], "diff_pairs": True},
                  "re-route with the in-house engine", engine="inhouse",
                  then="poll design_job_status, then pcb_autoroute_apply")
-        if by_engine["freerouting"]:
-            step("route_freerouting", {"expect_file": src, "route_only": by_engine["freerouting"]},
-                 "re-route with Freerouting, everything else fixed", engine="freerouting",
-                 then="poll route_freerouting_status, then route_import_ses")
     hints: list[str] = []
     for a in other:
         if a["action"] in ("widen", "narrow"):

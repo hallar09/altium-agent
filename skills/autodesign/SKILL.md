@@ -20,8 +20,6 @@ session journal, not the chat, is the truth.
 - Datasheet first: every device fact (pinout, decoupling, layout rules,
   absolute maximums) cited from the manufacturer's datasheet
   (`lib_fetch_datasheet`, `design_datasheet_checklist`). Never invent one.
-- Freerouting (GPL) runs only as the user's own install, only if the project
-  allows third-party engines (`route_engines` says).
 - A tool badged `live_unverified` may be wrong: confirm what it claims (read
   back, render, measure) before building on it, and tell the user when it
   misbehaves.
@@ -55,9 +53,9 @@ read the saved files.
 | library_readiness | missing symbols and footprints: `lib_create_*`; footprints checked against the package drawing with `lib_check_package` and `lib_render_package` | no unverified footprint |
 | schematic_emit | `design_execute_plan`; `proj_compile`, `proj_run_erc`, `design_audit_schematic`; `design_generate_bom` | ERC 0 errors; `design_gate_review(gate="schematic")` answered |
 | sch_to_pcb | `proj_sync_pcb` (its ECO dialog is answered by the dialog driver); `analyze_sch_pcb_sync` | every net and part on the board |
-| rules_stackup | `pcb_set_board_shape`; layers (`pcb_add_layer`, `pcb_modify_layer`, `analyze_si_generate_stackup` for impedance); rules (`pcb_create_design_rule`), diff pairs (`pcb_create_diff_pair`, `pcb_get_diff_pair_rules`) | rules match the fab profile (`analyze_dfm_use_profile`) |
-| placement | `place_plan` (answer its antenna questions; `profile=` for a house style), `place_check` until clean, `place_apply(confirm=true)` | `design_gate_review(gate="placement")` answered, no error marker |
-| routing | `route_broker_plan` and its steps in order (pairs, critical nets, bulk by Freerouting or in-house, `route_situs` to finish), `pcb_repour_polygons`, `pcb_run_drc`, `route_converge` until done | 0 unrouted, 0 copper DRC; pairs within the skew asked for; `design_gate_review(gate="routing")` answered |
+| rules_stackup | the board-setup skill: `pcb_set_board_shape`; the stack in one call (`pcb_import_layer_stack`, impedance from `analyze_si_impedance`); via types (`pcb_add_drill_pair` for blind/buried); classes, pairs, rules with `values_mm` (`pcb_create_design_rule`, `pcb_create_diff_pair`); Altium's default rules fixed or deleted (`pcb_audit_rules`, `pcb_set_rule_properties`, `pcb_delete_design_rule`) | `pcb_audit_rules` reports no failures; rules match the fab profile (`analyze_dfm_use_profile`) |
+| placement | the placement skill: `place_session_start`, every part placed with `place_session_move` and looked at with `place_session_view`, `place_session_check` until clean, `place_session_export`, `place_apply(confirm=true)` | `design_gate_review(gate="placement")` answered, no error marker |
+| routing | the routing skill: rules per class, power and ground in pours and planes, `route_session_start`, `route_session_fanout`, the critical nets one at a time and the rest a few at a time (`route_session_route`, `route_session_draw`), `route_session_check` until clean, `route_session_export`, `route_import_ses`, `pcb_repour_polygons`, `pcb_run_drc` | 0 unrouted, 0 copper DRC; pairs within the skew asked for; `design_gate_review(gate="routing")` answered |
 | pours_tuning | ground pours, stitching (`pcb_place_stitching_vias`), `route_via_style` and `route_set_via_tenting` to the style | via style matches, tenting verified from the file |
 | verification | `pcb_run_drc`, `analyze_drc_report`, `analyze_board_review`, `analyze_dfm`, `design_status` | `design_gate_review(gate="verification")` answered; open issues listed, none hidden |
 | outputs | only with the user's explicit approval | `design_session_report` written |

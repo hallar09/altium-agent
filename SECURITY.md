@@ -41,7 +41,6 @@ In scope:
 Out of scope:
 
 - Vulnerabilities in Altium Designer itself: report those to Altium
-- Freerouting, which runs as a separate process you installed
 - Vulnerabilities in upstream Python packages: report those to the
   package maintainers (we will bump pins once a fix is available)
 - Issues that require an attacker who already has interactive access

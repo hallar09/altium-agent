@@ -24,6 +24,7 @@ its refusals hold when the thing in front of it is real.
 from __future__ import annotations
 
 import itertools
+import os
 import subprocess
 import sys
 import time
@@ -34,9 +35,17 @@ from altium_agent.ui import dialog_driver as dd
 from altium_agent.ui import dialog_report as dr
 from altium_agent.ui import windows as w
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "win32" or not w.available(),
-    reason="live dialog driving needs win32 and pywin32")
+#: These open real message boxes on the desktop of whoever runs the suite,
+#: one after another, and take focus while they do. Run them on purpose:
+#: ``ALTIUM_AGENT_LIVE_DIALOG_TESTS=1 pytest tests/test_dialog_driver_live_windows.py``.
+LIVE = "ALTIUM_AGENT_LIVE_DIALOG_TESTS"
+
+pytestmark = [
+    pytest.mark.skipif(sys.platform != "win32" or not w.available(),
+                       reason="live dialog driving needs win32 and pywin32"),
+    pytest.mark.skipif(os.environ.get(LIVE) != "1",
+                       reason=f"opens real dialogs on the desktop; set {LIVE}=1 to run"),
+]
 
 
 #: Makes every spawned caption unique. Windows are matched by a

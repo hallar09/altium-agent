@@ -34,7 +34,7 @@ def tool_names() -> list[str]:
     # are layered on top of it, so the inner call builds a surface no
     # real server serves and makes their overrides look stale.
     mcp = FastMCP("test")
-    register_backend(mcp, "altium")
+    register_backend(mcp, "altium", "full")
     tools = asyncio.run(mcp.list_tools())
     return sorted(t.name for t in tools)
 

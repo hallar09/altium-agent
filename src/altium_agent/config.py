@@ -332,10 +332,3 @@ def configure(**kwargs) -> None:
     config = AltiumConfig(**base)
     from .bridge.altium_bridge import reset_bridge
     reset_bridge()
-
-
-# ---------------------------------------------------------------------------
-# External engines (Altium Agent). Freerouting is GPL and is never vendored:
-# it runs as a separate process from a jar the user installed. Both paths
-# are overridable; the defaults are where altium-mcp-pro installed them.
-# ---------------------------------------------------------------------------

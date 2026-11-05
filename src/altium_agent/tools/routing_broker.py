@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """The routing broker's tools (Altium Agent, phase d).
 
-route_engines, route_broker_plan, route_export_dsn, route_converge and
-route_via_style read files only. route_freerouting saves the focused board
-and starts Freerouting as an external process (a job); route_import_ses
-writes its tracks and vias; route_set_via_tenting tents vias and confirms it
-from the saved file. Each live tool refuses a sample or installed design and
-a focused board that is not the one named.
+route_engines, route_broker_plan, route_converge, route_via_style and
+route_power_fanout read files only. route_import_ses writes a fan-out's or a
+routing session's tracks and vias to the board; route_set_via_tenting tents
+vias and confirms it from the saved file. Each live tool refuses a sample or
+installed design and a focused board that is not the one named.
+
+Routing itself is the agent's, net by net, in a routing session
+(tools/interactive.py): no external autorouter is run.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from typing import Any
 from .house_style import _offline
 
 CHUNK = 400
+#: Jobs whose result is an SES that route_import_ses writes and after_jobs builds on.
+ROUTED_JOBS = ("fanout", "session")
 
 
 async def _focused(bridge, expect_file: str) -> tuple[str | None, str | None]:
@@ -45,159 +49,112 @@ def register_routing_broker_tools(mcp) -> None:
     @mcp.tool()
     @_offline
     def route_engines() -> dict[str, Any]:
-        """Which routing engines the broker can use here, and why not when not.
+        """Which routing engines the broker can use here.
 
-        in-house (always), Freerouting (when you installed it: GPL-3.0, run
-        as a separate process, never shipped; the Java it needs is checked),
-        and Altium's own Situs and interactive router (used by you; the
-        broker reads the saved result).
+        The in-house engine (always; route_session_route drives it net by
+        net), and Altium's own Situs and interactive router (used in Altium;
+        the broker reads the saved result).
         """
         return svc.engines_status()
 
     @mcp.tool()
     @_offline
     def route_broker_plan(project: str | None = None, pcb: str | None = None, profile: Any = None,
-                          engines: list[str] | None = None, batch_size: int = 0, max_passes: int = 50,
-                          name: str | None = None, reference: str | None = None) -> dict[str, Any]:
+                          engines: list[str] | None = None, name: str | None = None,
+                          reference: str | None = None) -> dict[str, Any]:
         """Plan how to route a board: which nets, in which order, by which engine (no Altium).
 
-        Differential pairs first (in-house, coupled); then clocks, crystal
-        and short local nets (in-house); then power and signals (Freerouting
-        when installed, else in-house); pours are left to the pours. Copper
-        already on the board is protected: its nets are locked first and
-        never ripped up. Ends with repour, DRC, route_converge and, with a
-        profile, the via style and ref_compare. Each step is an exact tool
-        call with its reason. Saves the plan JSON.
+        Differential pairs first (coupled); then clocks, crystal and short
+        local nets; then the power fan-out (a via from each power and ground
+        pad to its plane); then the rest; stitching last. Copper already on
+        the board is protected: its nets are locked first and never ripped
+        up. Ends with repour, DRC, route_converge and, with a profile, the
+        via style and ref_compare. Each step is an exact tool call with its
+        reason. Saves the plan JSON. Read it as the order to work in; the
+        routing skill does the work net by net in a routing session.
 
         Args:
             project: The .PrjPcb (or the active project).
             pcb: A .PcbDoc instead of the project's first.
             profile: A house-style profile (ref_profile) for the via style and
                 the final comparison.
-            engines: Subset of ["inhouse", "freerouting", "altium"].
-            batch_size: Freerouting nets per run; 0 = the whole bulk at once.
-            max_passes: Freerouting passes per run.
+            engines: Subset of ["inhouse", "altium"].
             name: File name for the plan.
             reference: The reference board of a re-layout (default the
                 profile's source). With the reference placement kept, the
                 big part's escape is copied from it first and clashing nets
                 are copied from it in route_converge (refcopy).
         """
-        return svc.route_broker_plan(project, pcb, profile, engines, batch_size, max_passes, name, reference)
+        return svc.route_broker_plan(project, pcb, profile, engines, name, reference)
 
     @mcp.tool()
-    @_offline
-    def route_export_dsn(project: str | None = None, pcb: str | None = None,
-                         route_only: list[str] | None = None, keep_existing: bool = True,
-                         track_width_mm: float | None = None, clearance_mm: float | None = None,
-                         via_diameter_mm: float | None = None, via_hole_mm: float | None = None,
-                         skip_nets: list[str] | None = None,
-                         net_widths_mm: dict[str, float] | None = None) -> dict[str, Any]:
-        """Write a Specctra DSN of the saved board (no Altium).
+    async def route_power_fanout(expect_file: str, nets: list[str] | None = None,
+                                 via_diameter_mm: float | None = None, via_hole_mm: float | None = None,
+                                 stub_width_mm: float | None = None, clearance_mm: float | None = None,
+                                 max_reach_mm: float = 1.5, pads: bool = True,
+                                 stitch_spacing_mm: float | None = None,
+                                 after_jobs: list[str] | None = None) -> dict[str, Any]:
+        """A short via from each power and ground pad to its plane (no Altium).
 
-        Pads, outline, nets, rules (widths, clearance, via from the board's
-        rules unless given), pours as planes, and the copper already there
-        as fixed wiring. With a list of nets to route, every other net is
-        exported as fixed (a batch). For any Specctra router; route_freerouting runs Freerouting.
-        """
-        from ..placement.service import load_board
+        Power and ground are carried by pours and planes. A surface-mount
+        pad on a layer its net is poured on is joined by the pour; every
+        other pad gets a via beside it, with a stub, on the net's plane:
+        the nearest spot that keeps the board's clearance to every other
+        net on every layer and to the edge. A same-net via already in reach
+        is shared. Run it after the critical nets and BEFORE the bulk of the
+        signals, so the vias get their spots; route_import_ses writes them.
 
-        b = load_board(project, pcb)
-        opts = svc.dsn_options(route_only, keep_existing, track_width_mm, clearance_mm, via_diameter_mm,
-                               via_hole_mm, None, skip_nets, net_widths_mm)
-        return svc.export(str(b.doc.path), opts)
-
-    @mcp.tool()
-    async def route_freerouting(expect_file: str, route_only: list[str] | None = None,
-                                max_passes: int = 50, timeout_s: int = 1200, optimize: bool = False,
-                                save_first: bool = True) -> dict[str, Any]:
-        """Save the focused board and start Freerouting on it, as a job.
-
-        Freerouting (GPL-3.0) is yours to install and runs as a separate
-        process with no window and no analytics; nothing of it is in Altium
-        Agent. The DSN is exported from the SAVED board (so save_first).
-        Returns a job id at once; poll route_freerouting_status, then
-        route_import_ses writes the result. Nothing on the board changes
-        until then.
+        Reads the SAVED board, so save first in Altium. Pads it cannot reach
+        are listed (unresolved), never forced: route those nets afterwards
+        (route_session_route).
 
         Args:
-            expect_file: Full path of the board; refused if another is focused.
-            route_only: Route only these nets (every other net stays as it
-                is, as an obstacle); default every unrouted net.
-            max_passes: Freerouting's routing passes.
-            timeout_s: Stop Freerouting after this long.
-            optimize: Run Freerouting's optimizer after a complete route
-                (slow).
-            save_first: Save the board in Altium first (default True).
+            expect_file: Full path of the board.
+            nets: Nets to fan out. Default: every net carried by an internal
+                plane or by pours covering a tenth of the board or more.
+            via_diameter_mm, via_hole_mm: Default: the RoutingVias rule.
+            stub_width_mm: Pad-to-via stub. Default: the Width rule.
+            clearance_mm: Default: the Clearance rule.
+            max_reach_mm: Farthest a via sits from its pad's edge.
+            pads: Fan out the pads (default). Pads a track or via of their
+                net already reaches are left alone, so running it again
+                adds nothing twice.
+            stitch_spacing_mm: Also stitch the net's pours on different
+                layers together, a via every this many mm where two of them
+                overlap (and clearance allows). Do it AFTER the signals:
+                pads=false, stitch_spacing_mm=5.
+            after_jobs: Finished routing jobs whose copper is on the board
+                first, when it has not been imported yet.
         """
-        from ..bridge import get_bridge
         from ..design.jobs import get_job_store
-        from ..routing.freerouting import find
 
         why = _protected(expect_file)
         if why:
             return {"ok": False, "refused": why}
-        from pathlib import Path as _P
-
-        pol = svc.project_policy(_P(expect_file).parent)
-        if not pol["third_party_engines"]:
-            return {"ok": False, "refused": f"the project's policy ({pol['source']}) forbids third-party "
-                                           "routing engines"}
-        f = find()
-        if f is None or not f.usable:
-            return {"ok": False, "error": "Freerouting is not usable here",
-                    "detail": svc.engines_status()["freerouting"]}
-        bridge = get_bridge()
-        focused, err = await _focused(bridge, expect_file)
-        if err:
-            return {"ok": False, "refused": err}
-        if save_first:
-            saved = await bridge.send_command_async("application.save_document", {"file_path": focused},
-                                                    timeout=60.0)
-            if isinstance(saved, dict) and saved.get("saved") is False:
-                return {"ok": False, "error": "the board was not saved", "save": saved}
-        tag = "batch" if route_only else "all"
-        opts = svc.dsn_options(route_only, True)
-        try:
-            ex = await asyncio.to_thread(svc.export, expect_file, opts, tag)
-        except Exception as exc:  # noqa: BLE001 - reported to the caller
-            return {"ok": False, "error": f"DSN export failed: {exc}"}
-        extra = ["--router.fanout.enabled=false",
-                 "--router.autorouter.ignore_net_classes=AGENT_FIXED"] if route_only else []
-        params = {**ex, "route_only": list(route_only or []), "max_passes": max_passes,
-                  "timeout_s": timeout_s, "optimize": optimize, "extra": extra}
-        job_id = get_job_store().submit("freerouting", svc.freerouting_job, params)
-        return {"ok": True, "job_id": job_id, "dsn": ex["dsn"], "nets": ex["nets"], "rules": ex["rules"],
-                "engine": f.to_dict(),
-                "next": "poll route_freerouting_status; when done, route_import_ses with this job id"}
-
-    @mcp.tool()
-    async def route_freerouting_status(job_id: str) -> dict[str, Any]:
-        """A Freerouting job's state, and the end of Freerouting's log."""
-        from pathlib import Path
-
-        from ..design.jobs import get_job_store
-
         store = get_job_store()
+        prior = []
+        for jid in after_jobs or []:
+            rec = store.get(jid)
+            if rec is None or rec.kind not in ROUTED_JOBS or rec.status != "done":
+                return {"ok": False, "error": f"after_jobs: {jid!r} is not a finished routing job"}
+            prior.append({**(rec.result or {}), "job_id": jid})
+        params = {"source": expect_file, "nets": nets, "via_diameter_mm": via_diameter_mm,
+                  "via_hole_mm": via_hole_mm, "stub_width_mm": stub_width_mm, "clearance_mm": clearance_mm,
+                  "max_reach_mm": max_reach_mm, "pads": pads, "stitch_spacing_mm": stitch_spacing_mm,
+                  "after": prior}
+        job_id = store.submit("fanout", svc.fanout_job, params)
+        await asyncio.to_thread(store.wait, job_id, 600)
         rec = store.get(job_id)
-        if rec is None or rec.kind != "freerouting":
-            return {"ok": False, "error": f"no freerouting job {job_id!r}"}
-        out: dict[str, Any] = {"ok": True, **rec.summary()}
-        if rec.status == "done":
-            out["freerouting"] = {k: v for k, v in (rec.result or {}).get("freerouting", {}).items()
-                                  if k != "log_tail"}
-        try:
-            log = Path((rec.result or {}).get("ses") or "").with_suffix(".log")
-            if log.is_file():
-                out["log_tail"] = log.read_text(encoding="utf-8", errors="replace")[-1200:]
-        except OSError:
-            pass
-        return out
+        if rec is None or rec.status != "done":
+            return {"ok": False, "job_id": job_id, "error": (rec.error if rec else None) or "the fan-out did not finish"}
+        out = rec.result or {}
+        return {"ok": True, "job_id": job_id, "ses": out["ses"], **out["fanout"],
+                "next": "route_import_ses with this job id (in Altium), then route the signals"}
 
     @mcp.tool()
     async def route_import_ses(job_id: str, expect_file: str, checkpoint: bool = True,
                                repour: bool = True, dry_run: bool = False) -> dict[str, Any]:
-        """Write a finished Freerouting job's new tracks and vias to the focused board.
+        """Write a finished fan-out's or routing session's tracks and vias to the focused board.
 
         Only copper that is not already there is written (hand routing is
         never doubled); tracks narrower than their net's minimum width are
@@ -205,7 +162,7 @@ def register_routing_broker_tools(mcp) -> None:
         absolute mils (board origin + SES); refused if the origin moved.
 
         Args:
-            job_id: A done route_freerouting job.
+            job_id: The job route_power_fanout or route_session_export returned.
             expect_file: Full path of the board the job routed.
             checkpoint: Snapshot the board folder first.
             repour: Repour the polygons afterwards.
@@ -222,8 +179,8 @@ def register_routing_broker_tools(mcp) -> None:
         if why:
             return {"ok": False, "refused": why}
         rec = get_job_store().get(job_id)
-        if rec is None or rec.kind != "freerouting":
-            return {"ok": False, "error": f"no freerouting job {job_id!r}"}
+        if rec is None or rec.kind not in ROUTED_JOBS:
+            return {"ok": False, "error": f"no routing job {job_id!r}"}
         if rec.status != "done":
             return {"ok": False, "error": f"job {job_id} is {rec.status}", "job": rec.summary()}
         job = rec.result or {}

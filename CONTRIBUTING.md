@@ -48,6 +48,9 @@ Pascal side; the workspace pointer lives at
 
 - `pytest` runs the offline suite, and is safe with Altium open
 - `ALTIUM_AGENT_INTEGRATION=1 pytest` adds the live-Altium tests
+- `ALTIUM_AGENT_LIVE_DIALOG_TESTS=1 pytest tests/test_dialog_driver_live_windows.py`
+  runs the dialog driver against real Windows message boxes; a plain `pytest`
+  skips them, because they open windows on your desktop and take focus
 - `python tests/test_cross_validate.py` runs the offline Pascal validator
   (requires Free Pascal in PATH)
 

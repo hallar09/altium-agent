@@ -25,7 +25,7 @@ def registered() -> set[str]:
     from altium_agent.tools.registry import ToolRegistry
 
     r = ToolRegistry()
-    register_backend(r)
+    register_backend(r, toolset="full")
     return set(r.names)
 
 
@@ -40,9 +40,9 @@ def test_named_tools_exist(path, registered):
     assert not missing, f"{path.name} names tools that are not registered: {missing}"
 
 
-def test_three_skills_with_frontmatter():
+def test_the_skills_with_frontmatter():
     names = sorted(p.parent.name for p in (REPO / "skills").rglob("SKILL.md"))
-    assert names == ["autodesign", "relayout", "review"]
+    assert names == ["autodesign", "board-setup", "placement", "relayout", "review", "routing"]
     for p in (REPO / "skills").rglob("SKILL.md"):
         head = p.read_text(encoding="utf-8").split("---")[1]
         assert f"name: {p.parent.name}" in head and "description:" in head

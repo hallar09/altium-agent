@@ -48,11 +48,34 @@ EXEMPT_PREFIXES = (
 )
 
 
+def _walked_files() -> list[str]:
+    """The files git would track, for a checkout without git (an unpacked
+    copy): the tree minus what .gitignore names."""
+    import fnmatch
+    import os
+
+    ignore = [ln.strip() for ln in (REPO / ".gitignore").read_text(encoding="utf-8").splitlines()
+              if ln.strip() and not ln.startswith("#")] + [".git/"]
+    dirs = [p.rstrip("/") for p in ignore if p.endswith("/")]
+    files = [p for p in ignore if not p.endswith("/")]
+    out = []
+    for root, subdirs, names in os.walk(REPO):
+        subdirs[:] = [d for d in subdirs if not any(fnmatch.fnmatch(d, pat) for pat in dirs)]
+        for name in names:
+            rel = Path(root, name).relative_to(REPO).as_posix()
+            if not any(fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(rel, pat) for pat in files):
+                out.append(rel)
+    return out
+
+
 def _tracked_text_files() -> list[Path]:
-    out = subprocess.run(
-        ["git", "ls-files"],
-        cwd=REPO, capture_output=True, text=True, encoding="utf-8", check=True,
-    ).stdout.splitlines()
+    try:
+        out = subprocess.run(
+            ["git", "ls-files"],
+            cwd=REPO, capture_output=True, text=True, encoding="utf-8", check=True,
+        ).stdout.splitlines()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        out = _walked_files()
     files = []
     for rel in out:
         if not rel or rel.startswith(EXEMPT_PREFIXES):

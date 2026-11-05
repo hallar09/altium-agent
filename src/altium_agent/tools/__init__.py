@@ -45,6 +45,7 @@ from .offline import register_offline_tools
 from .house_style import register_house_style_tools
 from .routing_broker import register_routing_broker_tools
 from .design_gates import register_design_gate_tools
+from .interactive import register_interactive_tools
 
 # Altium Agent drives Altium Designer only. The backend switch of
 # eda-agent (kicad / easyeda / both) was removed; the names stay so callers
@@ -62,7 +63,7 @@ DEFAULT_BACKEND = "altium"
 # and reaches the rest through tool_catalog / tool_invoke: a fraction of
 # the context, for clients that load every schema on every turn.
 TOOLSETS = ("full", "core", "minimal")
-DEFAULT_TOOLSET = "full"
+DEFAULT_TOOLSET = "core"
 
 #: Design tools that compute over a plan and never touch a bridge.
 #:
@@ -145,7 +146,8 @@ def register_backend(
     stray value in the environment can never leave the server toolless.
 
     Args:
-        toolset: "full" advertises every tool. "minimal" advertises only
+        toolset: "core" (the default) advertises registry.CORE_TOOLS.
+            "full" advertises every tool. "minimal" advertises only
             tool_catalog and tool_invoke while keeping all the others
             reachable through them, for clients that cannot cope with a
             few hundred tools.
@@ -172,7 +174,8 @@ def _register_core(mcp, backend: str) -> str:
             f"core toolset needs {missing}, which the backend did not register")
     for tool_name in CORE_TOOLS:
         if tool_name in registry:
-            mcp.tool()(registry.get(tool_name).fn)
+            spec = registry.get(tool_name)
+            mcp.tool(annotations=spec.annotations)(spec.fn)
     return name
 
 
@@ -193,11 +196,38 @@ def _register_minimal(mcp, backend: str) -> str:
         # These close over `registry`, so they discover and dispatch
         # across everything captured above even though the client sees
         # only these two.
-        mcp.tool()(registry.get(tool_name).fn)
+        spec = registry.get(tool_name)
+        mcp.tool(annotations=spec.annotations)(spec.fn)
     return name
 
 
+class _Annotating:
+    """Wraps the server so every ``@mcp.tool()`` gets its MCP annotations.
+
+    The registrars stay as they are; the hints come from the interaction
+    badge (metadata.tool_annotations) at the one place every tool passes
+    through. A registrar that passes its own ``annotations`` keeps them.
+    Everything else (list_tools, call_tool, prompt, ...) is the server's.
+    """
+
+    def __init__(self, target) -> None:
+        self._target = target
+
+    def tool(self, *args, **kwargs):
+        def deco(fn):
+            from .metadata import tool_annotations
+            kw = dict(kwargs)
+            if kw.get("annotations") is None:
+                kw["annotations"] = tool_annotations(kw.get("name") or fn.__name__)
+            return self._target.tool(*args, **kw)(fn)
+        return deco
+
+    def __getattr__(self, attr):
+        return getattr(self._target, attr)
+
+
 def _register_full(mcp, backend: str = DEFAULT_BACKEND) -> str:
+    mcp = _Annotating(mcp)
     backend = (backend or DEFAULT_BACKEND).strip().lower()
     if backend not in BACKENDS:
         backend = DEFAULT_BACKEND
@@ -228,6 +258,8 @@ def _register_full(mcp, backend: str = DEFAULT_BACKEND) -> str:
     register_routing_broker_tools(mcp)
     # Gate reviews, undo to a stage, design_status (phase e).
     register_design_gate_tools(mcp)
+    # AI-driven placement and routing sessions.
+    register_interactive_tools(mcp)
     return backend
 
 
@@ -253,6 +285,7 @@ __all__ = [
     "register_house_style_tools",
     "register_routing_broker_tools",
     "register_design_gate_tools",
+    "register_interactive_tools",
     "register_project_tools",
     "register_library_tools",
     "register_generic_tools",

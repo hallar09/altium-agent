@@ -22,7 +22,7 @@ def mcp():
     # by register_backend. Calling the inner one built a surface that no
     # real server ever serves -- one without tool_catalog itself.
     m = FastMCP("test")
-    register_backend(m, "altium")
+    register_backend(m, "altium", "full")
     return m
 
 

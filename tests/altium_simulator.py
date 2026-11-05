@@ -2117,6 +2117,12 @@ class AltiumSimulator:
                     '"total_unrouted":' + str(total) + '}')
             return _build_success_response(rid, data)
 
+        elif action == "focus_board":
+            # Mirrors PCB_FocusBoard: one board is open, so focusing it is
+            # always the board the simulator holds.
+            return _build_success_response(
+                rid, '{"focused":true,"board":"' + _escape_json_string(board.name) + '"}')
+
         elif action == "run_drc":
             viols = json.dumps(board.drc_violations)
             data = ('{"violation_count":' + str(len(board.drc_violations)) +

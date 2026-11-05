@@ -16,8 +16,8 @@ listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
 > DelphiScript linter (with the Altium Agent hardening rules), doctor, tool
 > catalog and generated reference (a); the offline readers, analysis and DFM
 > (b); the Brass placer with house-style profiles (c); the routing broker
-> with external Freerouting, Situs, reference copy, clash convergence and via
-> tenting (d); gate reviews, stage undo and design_status (e); the skills,
+> with the power fan-out, Situs, reference copy, clash convergence and via
+> tenting (d); AI-driven placement and routing sessions; gate reviews, stage undo and design_status (e); the skills,
 > runbook and gap list (f) are in place, and
 > the offline test suite passes. **Nothing has been verified against a live Altium by Altium Agent
 > yet**: every bridge tool is badged `simulator` or `live_unverified`, never
@@ -72,10 +72,12 @@ listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
 ### Keeping usage down
 
-All tools together are about 150k tokens of schemas. Register the server
-with `--toolset core` (the install scripts do) to advertise the ~95 tools
-a design run uses; everything else stays reachable through `tool_catalog`
-and `tool_invoke`. `design_get_discipline` returns one section at a time.
+All tools together are about 150k tokens of schemas. By default the
+server advertises the `core` toolset, the ~95 tools a design run uses
+(about 33k tokens); everything else stays reachable through `tool_catalog`
+and `tool_invoke`, with the same schemas and argument validation as a
+direct call. `--toolset full` (or `ALTIUM_AGENT_TOOLSET=full`) advertises
+everything. `design_get_discipline` returns one section at a time.
 Long design chats grow expensive: the session journal survives a new
 chat, so start one per stage with `design_session_resume`.
 
@@ -106,7 +108,7 @@ with:
 
 `doctor` checks the install, that exactly one Altium is running, that the
 bridge answers and its scripts match this checkout, a read-only round trip,
-the self-heal diagnosis, and (optionally) Freerouting and its Java.
+and the self-heal diagnosis.
 
 ## Register the MCP server with Claude
 
@@ -129,9 +131,11 @@ or the equivalent entry under `mcpServers` in Claude's configuration:
 }
 ```
 
-Clients that cannot load ~580 tool schemas can set `ALTIUM_AGENT_TOOLSET=minimal`
-in `env`; only `tool_catalog` and `tool_invoke` are advertised and every other
-tool stays reachable through them. `ALTIUM_AGENT_DISABLE_DASHBOARD=1` skips the
+`ALTIUM_AGENT_TOOLSET` in `env` picks what is advertised: `core` (the
+default), `full` (all ~600 tools), or `minimal` (only `tool_catalog` and
+`tool_invoke`, for clients that cap tool count). Every advertised tool
+carries MCP `readOnlyHint` / `destructiveHint` annotations derived from its
+interaction badge. `ALTIUM_AGENT_DISABLE_DASHBOARD=1` skips the
 local web dashboard for strict stdio clients.
 
 ## Quick starts
@@ -273,10 +277,9 @@ That clicks the menu and answers the dialogs in one call, which matters because 
   samples.
 - Nothing is called manufacturing-ready; fabrication outputs only after your
   explicit approval.
-- Freerouting (GPL) is never bundled: a Freerouting you installed runs as a
-  separate process, with no window and analytics off, when the broker's
-  `engines` include it (`ALTIUM_AGENT_FREEROUTING` for its jar or native build,
-  `ALTIUM_AGENT_JAVA`; or an installation under `%USERPROFILE%\.altium-mcp\freerouting`).
+- The AI places and routes the board itself, part by part and net by net, in
+  placement and routing sessions (`place_session_*`, `route_session_*`); no
+  external autorouter is run.
 
 ## Tests
 

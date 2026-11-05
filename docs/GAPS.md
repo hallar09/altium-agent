@@ -10,9 +10,9 @@ meanwhile. Kept up to date as gaps close.
 
 | Old system | What it does | Altium Agent today |
 |---|---|---|
-| Brass `pcb.stack`, altium-mcp `pcb.stack_import` | write the whole layer stack in one call from Altium's own parameter string (`Import_FromParameters`), planes given their nets | layer by layer: `pcb_add_layer`, `pcb_modify_layer`, `pcb_set_plane_net`; no one-call stack import |
+| Brass `pcb.stack`, altium-mcp `pcb.stack_import` | write the whole layer stack in one call from Altium's own parameter string (`Import_FromParameters`), planes given their nets | `pcb_import_layer_stack` writes the whole stack in one call (signal copper only: planes as pours, not plane layers) |
 | altium-mcp AutoLayout `SetSplitPlaneNets`, Brass the same | give AD26's split-plane objects on a fresh board their net and pour them (they stay "No Net" otherwise) | `pcb_set_plane_net` sets the layer's net; the split-plane fix-up is not ported (check after setting plane nets) |
-| BoardKit (Situs lesson), spec "pours shelved and restored automatically" | shelve the pours before routing and restore them after | **no tool**; shelve by hand (Tools > Polygon Pours > Shelve) or let Freerouting do the bulk (it takes pours as planes) |
+| BoardKit (Situs lesson), spec "pours shelved and restored automatically" | shelve the pours before routing and restore them after | **no tool**; shelve by hand (Tools > Polygon Pours > Shelve) for a Situs pass; a routing session routes before pours are poured, so it does not need it |
 | Brass `pcb.fanout` | Situs fan-out of every SMD pad | the in-house engine's plane fan-out stage (`pcb_autoroute(plane_fanout=true)`); no Situs fan-out |
 | Brass `pcb.import`, `pcb.remove_rooms` | Import Changes driven without the ECO dialog; remove the rooms it makes | `proj_sync_pcb` (the ECO dialog answered by the dialog driver); rooms deleted one by one (`pcb_delete_object`) |
 | Brass `pcb.pour` | draw and pour the brief's pours (GND on both outer layers, plane pours) | `pcb_place_polygon_rect`, `pcb_start_polygon_placement` (shapes one at a time) |
@@ -30,8 +30,8 @@ meanwhile. Kept up to date as gaps close.
 | Brass agent loop (`levers.ts`) | the user describes the placement in words; an LLM turns it into placer levers | the client model sets `place_plan` levers itself (no separate LLM call inside the server) |
 | Brass `brass check` | ERC + DRC + schematic/board parity in one command | `design_status` (ERC, unrouted, DRC report, DFM, style) plus `analyze_sch_pcb_sync` |
 | BoardKit briefs (`briefs\*.json`) | a written brief format (board, fab, rails, interfaces, critical nets, connectors, notes) that drives the run | the session requirement text and `design_validate_requirement`; the brief format is not read |
-| altium-mcp `analysis/whatif.py`, `hop.py`, `astar.py`, `negotiate.py` | what-if placement moves with congestion scoring, short "hop" fixes, a negotiated-congestion router | not ported (the broker uses the in-house engine, Freerouting and Situs) |
-| altium-mcp `analysis/variant.py` | route a placement variant offline with Freerouting to compare placements before committing | `place_plan` + `route_export_dsn` + `route_freerouting` on a saved variant, by hand |
+| altium-mcp `analysis/whatif.py`, `hop.py`, `astar.py`, `negotiate.py` | what-if placement moves with congestion scoring, short "hop" fixes, a negotiated-congestion router | not ported (the broker uses the in-house engine and Situs) |
+| altium-mcp `analysis/variant.py` | route a placement variant offline to compare placements before committing | a placement session's export, then a routing session on it (`route_session_route`), from the saved files |
 | altium-mcp `tools/incremental_place.py` | place a few parts at a time with checks | `place_plan` with `fixed` / `keep` levers |
 | altium-mcp `tools/workflow.py`, `project_ops.py`, `exports.py` | release packaging, release evidence and manifest, fab exports | deliberately not published: no fab outputs without the user's approval (`proj_run_outjob` exists for an approved run) |
 | altium-mcp `engines/` placement, component_search, release_evidence, test_plan | engine helpers behind those workflows | not ported |
@@ -47,6 +47,19 @@ meanwhile. Kept up to date as gaps close.
 - BoardKit `RuleTool.pas`, `DeleteRule.pas`: `pcb_create_design_rule`,
   `pcb_set_rule_properties`, `pcb_delete_design_rule`, `pcb_set_rules_enabled`
   (verified, and delete/recreate where AD26 ignores Enabled).
+- Kame FMU `PcbAutomation.pas` `MakeRule` / `DisableOtherRules`: the same rule
+  kinds through `pcb_create_design_rule` (routing via, polygon and plane
+  connect, plane clearance, annular ring, sliver, pair widths, `scope2`);
+  instead of disabling every default, `pcb_audit_rules` names the defaults
+  that conflict and the call that fixes each.
+
+## Still missing (rules)
+
+| What | Today |
+|---|---|
+| matched-length, max-via-count, routing-topology rules | not creatable by script; measure (`analyze_si_pair_skew`, `pcb_read_net_statistics`) |
+| rule priority | read only; delete and recreate to reorder |
+| blind/buried vias from the routing ENGINE | `route_session_route` and the fan-out place through vias; draw blind/buried ones with `route_session_draw(via_span="span")` |
 - BoardKit `LockCopper.pas`: `pcb_lock_net_routing`. `EndCommand.pas`:
   `app_exit_active_command`, `app_recover`.
 - Brass/altium-mcp per-call `X2.EXE -RScriptingSystem:RunScript`: replaced by the

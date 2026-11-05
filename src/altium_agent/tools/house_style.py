@@ -106,7 +106,8 @@ def register_house_style_tools(mcp) -> None:
                 edge_gap_mm, escape, bottom ("none"/"passives"/"all"),
                 body ("full"/"copper"), density, effort (0..1), seed,
                 decap_weight, fixed [{ref, x_mm, y_mm, rotation, side}],
-                keep [refs], edges [{ref, edge}], shape.
+                keep [refs] (exact designators: a name not on the board is
+                refused, with the likely match), edges [{ref, edge}], shape.
             profile: A house-style profile whose levers are the defaults;
                 ``levers`` override them.
             antennas: {ref: "top 6 5" | "none"} answers to the questions.

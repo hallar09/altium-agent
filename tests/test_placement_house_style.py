@@ -84,10 +84,50 @@ def test_decaps_end_up_near_their_ic():
     assert not any(f["code"] == "decap_far" for f in res["findings"])
 
 
+def test_only_caps_on_a_supply_count_as_decoupling():
+    """A crystal's load cap or a reset filter cap goes to ground too, but its
+    place is set by what it loads; counting it flagged it as a decap far
+    from its IC (the agent on Bluetooth Sentinel said so, rightly)."""
+    from altium_agent.reference.profile import decoupling
+
+    ic = _part("U1", 5, 5, ["3V3", "GND", "XTAL_IN", "NRST", "A", "B", "C", "D"], footprint="QFN")
+    parts = [ic, _part("C1", 1.6, 0.8, ["3V3", "GND"], x=1), _part("C2", 1.6, 0.8, ["XTAL_IN", "GND"], x=2),
+             _part("C3", 1.6, 0.8, ["NRST", "GND"], x=3), _part("C4", 1.6, 0.8, ["P3V3", "GND"], x=4)]
+    assert [d["ref"] for d in decoupling(parts)] == ["C1"]     # C4's rail has no IC pin here
+
+
 def test_levers_accept_mm_suffix_and_body():
     s = sanitize_levers({"spacing_mm": 0.4, "edge_gap_mm": 1.0, "body": "copper", "bogus": 1})
     assert s == {"spacing": pytest.approx(0.4), "edge_gap": pytest.approx(1.0), "body": "copper"}
     assert "bogus" not in s
+
+
+def test_keep_names_must_be_on_the_board():
+    """An unknown keep name used to be dropped without a word, so the part the
+    caller meant to hold still was moved (an agent passed "BOT1" for
+    "Altium Logo BOT1" and the logo went elsewhere)."""
+    parts = _board() + [_part("Altium Logo BOT1", 4, 4, [])]
+    assert svc.unknown_keep(parts, ["u1", "C2", "BOT1", "Q9"]) == ["BOT1", "Q9"]
+    hints = svc.did_you_mean(parts, ["BOT1", "C22", "Q9"])
+    assert hints["BOT1"] == ["Altium Logo BOT1"]
+    assert "C2" in hints["C22"]
+    assert hints["Q9"] == []
+
+
+def test_place_plan_refuses_an_unknown_keep_and_places_nothing(monkeypatch, tmp_path):
+    parts = _board() + [_part("Altium Logo BOT1", 4, 4, [])]
+
+    class _B:
+        doc, project, sheet_of, descriptions = None, None, {}, {}
+
+    monkeypatch.setattr(svc, "load_board", lambda *a, **k: _B())
+    monkeypatch.setattr(svc, "footprints_of", lambda *a, **k: parts)
+    monkeypatch.setattr(svc, "place_board", lambda *a, **k: pytest.fail("placed despite a bad keep"))
+    out = svc.place_plan(levers={"keep": ["BOT1", "U1"]})
+    assert out["ok"] is False
+    assert out["unknown_keep"] == ["BOT1"]
+    assert out["did_you_mean"] == {"BOT1": ["Altium Logo BOT1"]}
+    assert "nothing was placed" in out["error"]
 
 
 def test_check_flags_overlap_and_outline_and_inherited():

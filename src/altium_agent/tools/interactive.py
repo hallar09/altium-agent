@@ -165,10 +165,50 @@ def register_interactive_tools(mcp) -> None:
 
     @mcp.tool()
     @_offline
-    def route_session_check(session: str, nets: list[str] | None = None) -> dict[str, Any]:
+    def route_session_check(session: str, nets: list[str] | None = None,
+                            detail: str = "summary") -> dict[str, Any]:
         """What is still open (by the copper, pours and planes counted) and what
-        breaks a clearance (the in-house exact DRC), on the board or ``nets``."""
-        return R.check(session, nets)
+        breaks a clearance (the in-house exact DRC), on the board or ``nets``.
+
+        ``detail="summary"`` (default) gives counts, violations by rule and
+        the first few of each: enough to decide the next step at a fraction
+        of the tokens. ``detail="full"`` lists every open net and up to 200
+        violations; ask for it when you need the whole list once."""
+        return R.check(session, nets, detail)
+
+    @mcp.tool()
+    @_offline
+    def route_session_packets(session: str, count: int = 4, margin_mm: float = 1.0,
+                              nets: list[str] | None = None, axis: str = "auto",
+                              fork: bool = True) -> dict[str, Any]:
+        """Split the open nets into independent jobs for parallel planners.
+
+        The board is cut into ``count`` bands along its long axis (or
+        ``axis``). A net whose pads all sit inside one band (``margin_mm``
+        from its edges) belongs to that band's packet; one that crosses is
+        SHARED, for the lead to route first in this session. With ``fork``
+        each packet gets its own session file that accepts only its nets,
+        so planners never touch each other's work; route_session_merge
+        brings their copper back. Returns the packets (session, nets,
+        bounds), the shared nets, the order to work in and a short brief to
+        hand each planner.
+
+        Use it for big boards only: each planner starts cold and pays to
+        read its packet, so two or three packets of real work beat ten
+        small ones.
+        """
+        return R.packets(session, count, margin_mm, nets, axis, fork)
+
+    @mcp.tool()
+    @_offline
+    def route_session_merge(session: str, packet_sessions: list[str]) -> dict[str, Any]:
+        """Bring packet sessions' copper back into the parent session.
+
+        Each packet's own nets only, added since it was forked; copper that
+        left the packet's bounds is flagged, and the merged board is checked
+        (open connections, violations where packets meet). One
+        route_session_undo takes the whole merge back."""
+        return R.merge(session, packet_sessions)
 
     @mcp.tool()
     @_offline

@@ -61,6 +61,12 @@ board. Items marked **open** are not handled yet.
 | `pcb_run_drc` leaves the HTML report focused; the next run silently re-reads the old report. | `pcb_run_drc(board_path=...)` focuses the board first. |
 | `pcb_set_plane_net` does not set the net of AD26's split-plane objects. | **Open** (see GAPS.md). Use signal layers with pours, which `pcb_import_layer_stack` produces. |
 
+## Usage
+
+| Issue | Handled by |
+|---|---|
+| Long runs used up the user's limit: `pcb_run_drc` returned 100 full violations per run, session replies 40-60 rows each, and nine cold-started planners re-read the whole board (SODIMM, about 3M tokens). | Summaries by default: `pcb_run_drc(detail="summary")` gives counts by rule and the first 10 copper problems; `route_session_check(detail="summary")` and route/draw replies carry the first few rows and the counts. Big boards split into independent packets (`route_session_packets` forks one session per band that accepts only its nets; `route_session_merge` brings them back). `skills/routing/references/agents.md` says when splitting pays and how to brief a planner cheaply. |
+
 ## Arguments
 
 | Issue | Handled by |

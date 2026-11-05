@@ -419,6 +419,44 @@ def scope_problem(expr: str) -> tuple[str, str]:
         f"||, which bind after comparisons. Nothing was sent."), fixed
 
 
+#: Rule-name words that mark DRC noise rather than copper problems.
+_DRC_NOISE = ("silk", "mask", "sliver", "paste", "height", "testpoint", "assembly")
+
+
+def _compact_drc(result: Any, keep: int = 10) -> Any:
+    """A DRC reply an agent can afford to read on every run.
+
+    The bridge sends up to 100 violations with both primitives each; on a
+    dense board that is thousands of tokens per run, and most of it silk
+    and mask noise. This keeps the totals, counts by rule and the first
+    ``keep`` copper problems as rule, location and nets."""
+    if not isinstance(result, dict) or not isinstance(result.get("violations"), list):
+        return result
+    rows = result["violations"]
+    by_rule: dict[str, int] = {}
+    for v in rows:
+        r = str(v.get("rule") or v.get("name") or "?")
+        by_rule[r] = by_rule.get(r, 0) + 1
+
+    def noise(v: dict) -> bool:
+        r = str(v.get("rule") or v.get("name") or "").lower()
+        return any(w in r for w in _DRC_NOISE)
+
+    def short(v: dict) -> dict:
+        nets = sorted({str((v.get(k) or {}).get("net") or "") for k in ("primitive1", "primitive2")} - {""})
+        return {"rule": v.get("rule") or v.get("name", ""), "x_mils": v.get("x_mils"),
+                "y_mils": v.get("y_mils"), "layer": v.get("layer", ""), "nets": nets}
+
+    copper = [short(v) for v in rows if not noise(v)]
+    out = {k: v for k, v in result.items() if k != "violations"}
+    out["violations_by_rule"] = dict(sorted(by_rule.items(), key=lambda kv: -kv[1]))
+    out["violations"] = copper[:keep]
+    out["noise_rows"] = sum(1 for v in rows if noise(v))
+    out["detail"] = ("summary of the first %d rows; detail='full' for every row, analyze_drc_report for "
+                     "the whole report" % len(rows))
+    return out
+
+
 #: The exact (mm) values each pcb_create_design_rule kind accepts.
 _RULE_MM_KEYS: dict[str, tuple[str, ...]] = {
     "clearance": ("gap",),
@@ -910,7 +948,8 @@ def register_pcb_tools(mcp):
                           answer_dialogs: bool = False,
                           drc_pours: str = "ask",
                           allow_repour: bool = False,
-                          board_path: str = "") -> dict[str, Any]:
+                          board_path: str = "",
+                          detail: str = "summary") -> dict[str, Any]:
         """Run Design Rule Check on the active PCB. MODAL: Altium's Design
         Rule Checker dialog BLOCKS THE BRIDGE until it is answered, so this
         refuses unless ``allow_modal=True``. PREFER
@@ -939,6 +978,11 @@ def register_pcb_tools(mcp):
                 HTML report focused, and the next run without a focused
                 board silently re-reads the old report. With a path the
                 board is focused first (pcb_focus_board).
+            detail: "summary" (default): the total, counts by rule, and the
+                first 10 violations that are not silk or mask noise, each
+                as rule, location and nets. "full": the bridge's 100 rows
+                with every primitive. analyze_drc_report reads the whole
+                report from disk either way.
 
         Returns:
             ``violation_count`` (all), ``drc_triggered``,
@@ -989,6 +1033,8 @@ def register_pcb_tools(mcp):
         if focused is not None and isinstance(result, dict):
             result = dict(result)
             result["focused_board"] = board_path
+        if detail != "full":
+            result = _compact_drc(result)
         return result
 
     @mcp.tool()

@@ -25,6 +25,16 @@ Three rules carry most of the result:
    bad result is ripped up and routed again, in another order or another
    width, while it is still small.
 
+## Working within a usage limit
+
+Read `references/agents.md` before splitting work. In short: agents save
+your context, never the total; split only independent offline work, and
+for a big board use packets (`route_session_packets`, one planner per
+packet, `route_session_merge`). You are the only writer to Altium. Replies
+are summaries (`route_session_check` with `detail="full"` only when you need
+the list); look at a render at milestones, not after every call. Before
+starting more than two agents, tell the user how many and what for.
+
 ## Rules of the house
 
 - Work on a COPY of the project, never a sample or installed design.

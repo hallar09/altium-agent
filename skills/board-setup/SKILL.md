@@ -27,6 +27,12 @@ Three rules carry most of it:
    (`descriptor`, `*_written`, `rejected`). `pcb_audit_rules` and
    `pcb_read_stackup` read the saved file: `app_save_all` first.
 
+## Working within a usage limit
+
+This stage is small and sequential: do it yourself, no subagents. One
+`pcb_audit_rules` call replaces reading every rule; batch the fixes. The
+routing skill's `references/agents.md` covers when splitting pays.
+
 ## Rules of the house
 
 - Work on a COPY of the project, never a sample or installed design.

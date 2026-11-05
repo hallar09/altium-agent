@@ -24,6 +24,14 @@ session journal, not the chat, is the truth.
   back, render, measure) before building on it, and tell the user when it
   misbehaves.
 
+## Working within a usage limit
+
+Agents save your context, never the total: each starts cold. Split only
+independent offline work (routing packets, a fresh-eyes reviewer at a gate,
+per-part datasheet checks), keep every write to Altium yourself, and tell
+the user how many agents and what for before starting more than two. Details
+in the routing skill's `references/agents.md`.
+
 ## Start
 
 1. `app_ping` (Altium really answers; a status read does not prove it), then

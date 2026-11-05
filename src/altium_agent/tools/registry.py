@@ -89,7 +89,7 @@ CORE_TOOLS = MINIMAL_TOOLS + (
     "place_session_view", "place_session_undo", "place_session_export",
     "route_session_start", "route_session_route", "route_session_draw", "route_session_fanout",
     "route_session_check", "route_session_ripup", "route_session_undo", "route_session_view",
-    "route_session_export",
+    "route_session_export", "route_session_packets", "route_session_merge",
     "route_engines", "route_broker_plan",
     "route_import_ses", "route_situs", "route_converge", "route_refcopy",
     "route_via_style", "route_set_via_tenting", "route_power_fanout",

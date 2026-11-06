@@ -224,11 +224,65 @@ def register_interactive_tools(mcp) -> None:
 
     @mcp.tool()
     @_offline
-    def route_session_view(session: str, nets: list[str] | None = None, side: str = "top") -> dict[str, Any]:
+    def route_session_view(session: str, nets: list[str] | None = None, side: str = "top",
+                           layers: list[str] | None = None,
+                           region_mm: list[float] | None = None) -> dict[str, Any]:
         """Draw the board with the session's copper: a PNG to Read. Open
         connections are ratsnest lines (of ``nets`` only, when given),
-        violations numbered markers."""
-        return R.view(session, nets, side)
+        violations numbered markers.
+
+        Args:
+            layers: Only these copper layers (e.g. ["MidLayer2"]); through-hole
+                pads and vias are always drawn. One layer at a time is how to
+                see an inner layer's routing under the others.
+            region_mm: [x1, y1, x2, y2] in mm: zoom to that window (a BGA's
+                escape, one byte lane) instead of the whole board.
+        """
+        return R.view(session, nets, side, layers, region_mm)
+
+    @mcp.tool()
+    @_offline
+    def route_session_lengths(session: str, nets: list[str] | None = None, from_ref: str | None = None,
+                              to_ref: str | None = None, layer_scale: dict[str, float] | None = None,
+                              via_length: bool = True, groups: list[dict] | None = None,
+                              pairs: list[list[str]] | None = None) -> dict[str, Any]:
+        """Net lengths along the session's copper, for matching and skew.
+
+        Each net: all its copper (total_mm, per layer, vias), and with
+        from_ref/to_ref (designators, e.g. "X1" and "U1") its length pad to
+        pad along the copper (path_mm), which is what a DDR or pair budget
+        counts. A via counts as the stack depth it crosses (via_length).
+
+        Args:
+            layer_scale: Per-layer factor to an outer-equivalent length, e.g.
+                {"MidLayer2": 1.19} for a stripline that is slower than the
+                microstrip it is matched to.
+            groups: [{name, nets, target?, tolerance_mm?}]: each member
+                against the target ("max" default, "mean", or a net name,
+                e.g. the lane's strobe); members outside the tolerance listed.
+            pairs: [[P, N], ...]: the skew of each pair.
+        """
+        return R.lengths(session, nets, from_ref, to_ref, layer_scale, via_length, groups, pairs)
+
+    @mcp.tool()
+    @_offline
+    def route_session_draw_pair(session: str, positive: str, negative: str, points: list[dict],
+                                gap_mm: float | None = None, width_mm: float | None = None,
+                                via_diameter_mm: float | None = None, via_hole_mm: float | None = None,
+                                via_span: str = "through") -> dict[str, Any]:
+        """Draw a differential pair from its centreline, both nets at once.
+
+        ``points`` are the pair's centreline, as for route_session_draw
+        ({x_mm, y_mm, layer}; the same point twice on two layers is a layer
+        change). ``positive`` runs on the left of the direction of travel,
+        ``negative`` on the right, ``gap_mm`` apart edge to edge, mitred
+        at the corners; at a layer change each gets its via, side by side.
+        Start and end the centreline between the two pads, so each track
+        ends on its own pad. Returns what was drawn, the skew of the drawn
+        part, and the check on both nets; route_session_lengths gives the
+        pad-to-pad skew."""
+        return R.draw_pair(session, positive, negative, points, gap_mm, width_mm, via_diameter_mm,
+                           via_hole_mm, via_span)
 
     @mcp.tool()
     @_offline

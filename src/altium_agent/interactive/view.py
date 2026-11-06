@@ -17,8 +17,13 @@ from ..units import MILS_PER_MM
 
 def render(doc: PcbDocument, out: Path, *, markers: list[dict] | None = None, nets: set[str] | None = None,
            highlight: list[str] | None = None, side: str = "top", ratsnest: bool = True,
-           width: int = 1600) -> dict[str, Any]:
-    """Draw ``doc`` to ``out`` (.svg, and .png when a browser can rasterize)."""
+           width: int = 1600, layers: list[str] | None = None,
+           region_mm: list[float] | None = None) -> dict[str, Any]:
+    """Draw ``doc`` to ``out`` (.svg, and .png when a browser can rasterize).
+
+    ``layers``: only these copper layers' tracks, arcs and pads (through-hole
+    pads, vias, the outline and the designators stay). ``region_mm``
+    [x1, y1, x2, y2]: the picture cropped to that window."""
     from ..design.gate_review import _png
     from ..placement.footprints import board_box, footprints_of
     from ..render import PcbRenderOptions, render_pcb_svg
@@ -38,18 +43,40 @@ def render(doc: PcbDocument, out: Path, *, markers: list[dict] | None = None, ne
     for i, m in enumerate(marks, 1):
         m.setdefault("label", str(i))
     g["review"] = {"markers": marks, "lines": ratsnest_lines(doc, nets) if ratsnest else []}
+    if region_mm is not None:
+        x1, y1, x2, y2 = (v * MILS_PER_MM for v in region_mm)
+        g["bbox"] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                     "width": x2 - x1, "height": y2 - y1}
+    keep = None
+    if layers:
+        keep = set(layers) | {"MultiLayer"}
+        for k in ("tracks", "arcs", "pads", "regions"):
+            if isinstance(g.get(k), list):
+                g[k] = [o for o in g[k] if o.get("layer") in keep or o.get("layer") not in _COPPER_NAMES(o)]
     out.parent.mkdir(parents=True, exist_ok=True)
-    svg = render_pcb_svg(g, PcbRenderOptions(interactive_legend=False, view_side=side))
+    opts = PcbRenderOptions(interactive_legend=False, view_side=side)
+    if region_mm is not None:
+        opts.margin_mils = 20
+    svg = render_pcb_svg(g, opts)
     pic = _png(svg, out.with_suffix(".svg"), g.get("bbox"), width)
     if not pic.get("png"):
         # No headless browser here (or it would not run): draw the PNG directly.
         note = pic.get("png_note")
-        pic["png"] = _plot(doc, out.with_suffix(".png"), marks, g["review"]["lines"], side, width)
+        pic["png"] = _plot(doc, out.with_suffix(".png"), marks, g["review"]["lines"], side, width,
+                           layers=layers, region_mm=region_mm)
         pic["png_note"] = None if pic["png"] else note
     return {**pic, "markers": [{"label": m["label"], "what": m.get("what", "")} for m in marks][:60]}
 
 
-def _plot(doc: PcbDocument, png: Path, marks: list[dict], lines: list[dict], side: str, width: int) -> str | None:
+def _COPPER_NAMES(o: dict) -> set[str]:
+    """Copper layer names (the ones ``layers`` filters); anything else is kept."""
+    name = str(o.get("layer") or "")
+    return {name} if (name in ("TopLayer", "BottomLayer") or name.startswith("MidLayer")
+                      or name.startswith("InternalPlane")) else set()
+
+
+def _plot(doc: PcbDocument, png: Path, marks: list[dict], lines: list[dict], side: str, width: int,
+          layers: list[str] | None = None, region_mm: list[float] | None = None) -> str | None:
     """The board drawn with matplotlib: outline, part bodies and designators,
     pads (top red, bottom blue, through-hole grey), tracks, vias, ratsnest
     (yellow) and the numbered markers. mm, board frame; viewed from ``side``."""
@@ -63,8 +90,10 @@ def _plot(doc: PcbDocument, png: Path, marks: list[dict], lines: list[dict], sid
         return None
     import math
 
+    from ..interactive.board_model import legacy_id
     from ..placement.footprints import board_box, footprints_of
 
+    show = {legacy_id(n) for n in layers} if layers else None
     mil = 1 / MILS_PER_MM
     flip = -1 if side == "bottom" else 1
     poly = doc.outline_poly or []
@@ -73,6 +102,8 @@ def _plot(doc: PcbDocument, png: Path, marks: list[dict], lines: list[dict], sid
     for c in doc.components:                     # parts staged beside the board count too
         xs.append(c.x_mm)
         ys.append(c.y_mm)
+    if region_mm is not None:
+        xs, ys = [region_mm[0], region_mm[2]], [region_mm[1], region_mm[3]]
     w, h = max(xs) - min(xs) + 6, max(ys) - min(ys) + 6
     fig = plt.figure(figsize=(width / 100, max(4.0, width / 100 * h / max(w, 1e-6))), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
@@ -81,10 +112,12 @@ def _plot(doc: PcbDocument, png: Path, marks: list[dict], lines: list[dict], sid
         ax.add_patch(Polygon([(flip * x, y) for x, y in poly], closed=True, fill=False, ec="#e5e7eb", lw=1.5))
     colors = {1: "#ef4444", 32: "#3b82f6"}
     for t in doc.tracks:
-        if 1 <= t.layer <= 32 and t.polygon == 0xFFFF and t.component == 0xFFFF:
+        if 1 <= t.layer <= 32 and t.polygon == 0xFFFF and t.component == 0xFFFF and (show is None or t.layer in show):
             ax.plot([flip * t.x1, flip * t.x2], [t.y1, t.y2], color=colors.get(t.layer, "#a3e635"),
                     lw=max(0.6, t.width * width / max(w, 1) * 0.7), solid_capstyle="round", alpha=0.85)
     for p in doc.pads:
+        if show is not None and not (p.hole > 0 or p.layer == 74) and p.layer not in show:
+            continue
         c = "#9ca3af" if p.hole > 0 or p.layer == 74 else colors.get(p.layer, "#a3e635")
         a, hw, hh = math.radians(p.rotation), p.size_x / 2, p.size_y / 2
         pts = [(p.x + dx * math.cos(a) - dy * math.sin(a), p.y + dx * math.sin(a) + dy * math.cos(a))
@@ -110,8 +143,9 @@ def _plot(doc: PcbDocument, png: Path, marks: list[dict], lines: list[dict], sid
         ax.text(flip * x + r, y + r, m.get("label", ""), color=sev.get(m.get("severity"), "#22d3ee"), fontsize=9,
                 fontweight="bold")
     xs2 = [flip * x for x in xs]
-    ax.set_xlim(min(xs2) - 3, max(xs2) + 3)
-    ax.set_ylim(min(ys) - 3, max(ys) + 3)
+    pad = 0.3 if region_mm is not None else 3
+    ax.set_xlim(min(xs2) - pad, max(xs2) + pad)
+    ax.set_ylim(min(ys) - pad, max(ys) + pad)
     ax.set_aspect("equal")
     ax.axis("off")
     fig.savefig(png, facecolor="#1f2937")

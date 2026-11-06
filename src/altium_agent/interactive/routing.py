@@ -251,7 +251,6 @@ def draw(session: str, net: str, path_points: list[dict], width_mm: float | None
     second point of a layer change may carry ``via_low_layer`` and
     ``via_high_layer`` to give that one via its own span."""
     from ..bench.connectivity import copper_order
-    from .board_model import legacy_id
 
     path, data = S.load(session, KIND)
     _packet_guard(data, [net])
@@ -259,11 +258,42 @@ def draw(session: str, net: str, path_points: list[dict], width_mm: float | None
     order = [lid for lid in copper_order(doc) if lid <= 32] or [1, 32]
     if net not in doc.nets:
         raise InvalidArgument(f"{net} is not a net of this board")
-    if len(path_points) < 2:
-        raise InvalidArgument("a path needs two points or more")
     r = _rules(doc)
     w = width_mm or r["width_mm"]
     vd, vh = via_diameter_mm or r["via_diameter_mm"], via_hole_mm or r["via_hole_mm"]
+    tracks, vias = _path_copper(net, path_points, order, w, vd, vh, via_span)
+    _record(path, data, f"draw {net}", tracks, vias)
+    out = {"net": net, **_report(_doc(data), {net}, tracks, vias)}
+    out.update(_span_notes(data, vias))
+    return out
+
+
+def _span_notes(data: dict, vias: list[dict]) -> dict:
+    """Blind/buried spans the vias use, and the drill pairs the board still lacks."""
+    out: dict[str, Any] = {}
+    spans = sorted({(v["layer_start"], v["layer_end"]) for v in vias if "layer_start" in v})
+    if spans:
+        from .board_model import layer_token
+        have = drill_pairs(data["source"])
+        missing = [(lo, hi) for lo, hi in spans if (lo, hi) not in have and (hi, lo) not in have]
+        out["blind_or_buried_vias"] = [f"{layer_token(lo)}-{layer_token(hi)}" for lo, hi in spans]
+        if missing:
+            out["missing_drill_pairs"] = [
+                {"tool": "pcb_add_drill_pair",
+                 "arguments": {"low_layer": layer_token(lo), "high_layer": layer_token(hi)}}
+                for lo, hi in missing]
+            out["note"] = ("the board has no drill pair for these spans: add them (then save) before "
+                           "route_import_ses, or Altium's LayerPairs rule flags every one")
+    return out
+
+
+def _path_copper(net: str, path_points: list[dict], order: list[int], w: float, vd: float, vh: float,
+                 via_span: str) -> tuple[list[dict], list[dict]]:
+    """Tracks and vias for one net's path of points ``{x_mm, y_mm, layer}``."""
+    from .board_model import legacy_id
+
+    if len(path_points) < 2:
+        raise InvalidArgument("a path needs two points or more")
     tracks, vias = [], []
     for a, b in zip(path_points, path_points[1:]):
         la, lb_ = legacy_id(str(a.get("layer", ""))), legacy_id(str(b.get("layer", "")))
@@ -282,22 +312,118 @@ def draw(session: str, net: str, path_points: list[dict], width_mm: float | None
             vias.append(via)
         elif math.hypot(bx - ax, by - ay) > 1e-6:
             tracks.append({"net": net, "layer": la, "x1": ax, "y1": ay, "x2": bx, "y2": by, "width": w})
-    _record(path, data, f"draw {net}", tracks, vias)
-    out = {"net": net, **_report(_doc(data), {net}, tracks, vias)}
-    spans = sorted({(v["layer_start"], v["layer_end"]) for v in vias if "layer_start" in v})
-    if spans:
-        from .board_model import layer_token
-        have = drill_pairs(data["source"])
-        missing = [(lo, hi) for lo, hi in spans if (lo, hi) not in have and (hi, lo) not in have]
-        out["blind_or_buried_vias"] = [f"{layer_token(lo)}-{layer_token(hi)}" for lo, hi in spans]
-        if missing:
-            out["missing_drill_pairs"] = [
-                {"tool": "pcb_add_drill_pair",
-                 "arguments": {"low_layer": layer_token(lo), "high_layer": layer_token(hi)}}
-                for lo, hi in missing]
-            out["note"] = ("the board has no drill pair for these spans: add them (then save) before "
-                           "route_import_ses, or Altium's LayerPairs rule flags every one")
+    return tracks, vias
+
+
+def _same_spot(p: dict | None, x: float, y: float) -> bool:
+    return p is not None and math.hypot(float(p["x_mm"]) - x, float(p["y_mm"]) - y) < 1e-6
+
+
+def _offset_path(points: list[dict], d: float, via_off: float) -> list[dict]:
+    """``points`` moved ``d`` to the left of the direction of travel (negative:
+    right), mitred at the corners. Where the layer changes, the via sits
+    ``via_off`` out instead (vias need more room than tracks), with a short
+    jog to it on each layer."""
+    xy = [(float(p["x_mm"]), float(p["y_mm"])) for p in points]
+    n = len(points)
+
+    def unit(a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(dx, dy)
+        return (dx / L, dy / L) if L > 1e-9 else None
+
+    # each segment's direction; a via's zero-length step takes a neighbour's
+    dirs = [unit(xy[i], xy[i + 1]) for i in range(n - 1)]
+    for i in range(len(dirs)):
+        if dirs[i] is None:
+            dirs[i] = (next((dirs[j] for j in range(i - 1, -1, -1) if dirs[j]), None)
+                       or next((dirs[j] for j in range(i + 1, len(dirs)) if dirs[j]), None) or (1.0, 0.0))
+    out = []
+    for i, p in enumerate(points):
+        din = dirs[i - 1] if i > 0 else dirs[0]
+        dout = dirs[i] if i < n - 1 else dirs[-1]
+        nin, nout = (-din[1], din[0]), (-dout[1], dout[0])
+        mx, my = nin[0] + nout[0], nin[1] + nout[1]
+        m = math.hypot(mx, my)
+        if m < 1e-9:
+            mx, my, m = nin[0], nin[1], 1.0
+        mx, my = mx / m, my / m
+        cos = mx * nin[0] + my * nin[1]
+        k = d / max(cos, 0.3)
+        q = {**p, "x_mm": xy[i][0] + mx * k, "y_mm": xy[i][1] + my * k}
+        nxt = points[i + 1] if i + 1 < n else None
+        prv = points[i - 1] if i > 0 else None
+        after = nxt is not None and nxt.get("layer") != p.get("layer") and _same_spot(nxt, *xy[i])
+        before = prv is not None and prv.get("layer") != p.get("layer") and _same_spot(prv, *xy[i])
+        if after or before:
+            # the via on the line square to the travel at this spot
+            v = {**p, "x_mm": xy[i][0] + mx * via_off, "y_mm": xy[i][1] + my * via_off}
+            if abs(via_off) <= abs(d) + 1e-9:
+                out.append(v)
+            elif after:
+                out += [q, v]
+            else:
+                out += [v, q]
+        else:
+            out.append(q)
     return out
+
+
+def draw_pair(session: str, positive: str, negative: str, path_points: list[dict], gap_mm: float | None = None,
+              width_mm: float | None = None, via_diameter_mm: float | None = None,
+              via_hole_mm: float | None = None, via_span: str = "through") -> dict[str, Any]:
+    """A differential pair from its centreline: ``path_points`` as for draw,
+    ``positive`` on the left of the direction of travel and ``negative`` on
+    the right, ``gap_mm`` apart edge to edge (default: the board's clearance).
+    At a layer change each gets a via, side by side, as far apart as vias
+    need."""
+    from ..bench.connectivity import copper_order
+
+    path, data = S.load(session, KIND)
+    _packet_guard(data, [positive, negative])
+    doc = _doc(data)
+    for n in (positive, negative):
+        if n not in doc.nets:
+            raise InvalidArgument(f"{n} is not a net of this board")
+    if positive == negative:
+        raise InvalidArgument("a pair is two different nets")
+    if gap_mm is not None and gap_mm <= 0:
+        raise InvalidArgument("gap_mm is the edge-to-edge gap, > 0")
+    order = [lid for lid in copper_order(doc) if lid <= 32] or [1, 32]
+    r = _rules(doc)
+    w = width_mm or r["width_mm"]
+    gap = gap_mm if gap_mm is not None else r["clearance_mm"]
+    vd, vh = via_diameter_mm or r["via_diameter_mm"], via_hole_mm or r["via_hole_mm"]
+    d = (gap + w) / 2
+    via_off = max(d, (vd + r["clearance_mm"]) / 2)
+    tracks, vias = [], []
+    for net, sign in ((positive, 1), (negative, -1)):
+        t_, v_ = _path_copper(net, _offset_path(path_points, sign * d, sign * via_off), order, w, vd, vh,
+                              via_span)
+        tracks += t_
+        vias += v_
+    _record(path, data, f"pair {positive}/{negative}", tracks, vias)
+    out = {"pair": [positive, negative], "gap_mm": round(gap, 4), "width_mm": round(w, 4),
+           **_report(_doc(data), {positive, negative}, tracks, vias)}
+    drawn = {n: round(sum(math.hypot(t["x2"] - t["x1"], t["y2"] - t["y1"]) for t in tracks if t["net"] == n), 3)
+             for n in (positive, negative)}
+    out["drawn_mm"] = drawn
+    out["drawn_skew_mm"] = round(drawn[positive] - drawn[negative], 3)
+    out["skew_note"] = ("skew of what was drawn (the inside of each bend is shorter); "
+                        "route_session_lengths gives it pad to pad")
+    out.update(_span_notes(data, vias))
+    return out
+
+
+def lengths(session: str, nets: list[str] | None = None, from_ref: str | None = None, to_ref: str | None = None,
+            layer_scale: dict[str, float] | None = None, via_length: bool = True,
+            groups: list[dict] | None = None, pairs: list[list[str]] | None = None) -> dict[str, Any]:
+    """Net lengths along the session's copper (interactive.lengths.measure)."""
+    from .lengths import measure
+
+    _, data = S.load(session, KIND)
+    return measure(_doc(data), list(nets or []), from_ref=from_ref, to_ref=to_ref, layer_scale=layer_scale,
+                   via_length=via_length, groups=groups, pairs=pairs)
 
 
 def fanout(session: str, nets: list[str] | None = None, stitch_spacing_mm: float | None = None,
@@ -379,18 +505,33 @@ def undo(session: str, steps: int = 1) -> dict[str, Any]:
     return {"undone": undone, "left": len(data["history"])}
 
 
-def view(session: str, nets: list[str] | None = None, side: str = "top") -> dict[str, Any]:
+def view(session: str, nets: list[str] | None = None, side: str = "top", layers: list[str] | None = None,
+         region_mm: list[float] | None = None) -> dict[str, Any]:
     """The board with the session's copper, open connections as ratsnest,
-    violations numbered."""
+    violations numbered. ``layers`` draws only those copper layers (through-
+    hole pads and vias always); ``region_mm`` [x1, y1, x2, y2] zooms in."""
+    from .board_model import legacy_id
     from .view import render
 
+    if layers:
+        bad = [name for name in layers if legacy_id(str(name)) is None]
+        if bad:
+            raise InvalidArgument(f"layers: {bad} are not copper layer names (TopLayer, MidLayerN, BottomLayer)")
+    if region_mm is not None:
+        if len(region_mm) != 4 or region_mm[2] <= region_mm[0] or region_mm[3] <= region_mm[1]:
+            raise InvalidArgument("region_mm is [x1, y1, x2, y2] in mm, with x2 > x1 and y2 > y1")
     path, data = S.load(session, KIND)
     doc = _doc(data)
     _, rows = _violations(doc, set(nets) if nets else None, limit=40)
+    if region_mm is not None:
+        x1, y1, x2, y2 = region_mm
+        rows = [v for v in rows if x1 <= v["at_mm"][0] <= x2 and y1 <= v["at_mm"][1] <= y2]
     marks = [{"x": v["at_mm"][0] * 39.37007874, "y": v["at_mm"][1] * 39.37007874, "r": 25, "severity": "error",
               "what": f"{v['rule']}: {v['a']} / {v['b']}"} for v in rows]
-    out = path.with_name(f"{path.stem}-view-{len(data['history'])}")
-    return render(doc, out, markers=marks, nets=set(nets) if nets else None, side=side)
+    tag = (f"-{'-'.join(layers)}" if layers else "") + ("-zoom" if region_mm else "")
+    out = path.with_name(f"{path.stem}-view-{len(data['history'])}{tag}")
+    return render(doc, out, markers=marks, nets=set(nets) if nets else None, side=side,
+                  layers=list(layers) if layers else None, region_mm=region_mm)
 
 
 def _packet_guard(data: dict, nets: list[str]) -> None:

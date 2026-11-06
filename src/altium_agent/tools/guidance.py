@@ -497,6 +497,42 @@ _RECIPES: tuple[dict[str, Any], ...] = (
             "splits per pair before release."),
     },
     {
+        "task": "Measure net lengths, match a byte lane, check pair skew",
+        "keywords": ("length", "lengths", "match", "matching", "skew", "tune", "tuning", "lane",
+                     "byte", "ddr", "strobe", "dqs", "flight", "delay", "measure"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["route_session_lengths", "route_session_draw", "route_session_draw_pair"],
+        "avoid": [
+            ("pcb_read_net_statistics", "the saved board's whole-net copper only; no pad-to-pad "
+                                        "length, no via depth, nothing the session has not exported"),
+        ],
+        "note": (
+            "In a routing session: route_session_lengths(session, nets, from_ref='X1', to_ref='U1') "
+            "gives each net pad to pad along its copper (path_mm), a via counted as the stack depth "
+            "it crosses, per layer; layer_scale={'MidLayer2': 1.19} turns an inner layer into "
+            "outer-equivalent length. groups=[{name, nets, target: '<strobe>' | 'max' | 'mean', "
+            "tolerance_mm}] lists the members outside the budget; pairs=[[P, N]] the skew. "
+            "Do not write a script of your own for this."),
+    },
+    {
+        "task": "Draw a differential pair by hand",
+        "keywords": ("differential", "pair", "pairs", "draw", "coupled", "usb", "lvds", "dqs", "clock",
+                     "hand", "manual", "centreline", "centerline", "gap"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["route_session_draw_pair", "route_session_lengths", "route_session_view"],
+        "avoid": [
+            ("route_session_draw", "one net at a time: drawing P and N separately gets the gap "
+                                   "wrong at every bend; draw_pair offsets both from one centreline"),
+        ],
+        "note": (
+            "route_session_draw_pair(session, positive, negative, points=centreline, gap_mm, "
+            "width_mm): positive on the left of the direction of travel, negative on the right, "
+            "mitred at corners; the same point twice on two layers is a layer change, and each net "
+            "gets its via side by side. Then route_session_lengths(pairs=[[P, N]]) for the skew."),
+    },
+    {
         "task": "Set the via size the routers place, per class",
         "keywords": ("via", "vias", "routing", "size", "hole", "drill", "style", "fanout"),
         "document_kind": "board",

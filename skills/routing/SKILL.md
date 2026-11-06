@@ -84,8 +84,11 @@ starting more than two agents, tell the user how many and what for.
    power runs. Either draw the path yourself (`route_session_draw`: points
    with their layer, the via's point twice where the layer changes) or ask
    the engine for that one net with its class's width (`route_session_route`).
-   Check what it did; view; rip up (`route_session_ripup`) and redo it if it
-   is not what a careful designer would draw. On a board with blind or buried
+   A pair is one call: `route_session_draw_pair` takes the pair's
+   centreline and lays both nets at the gap, vias side by side; never draw
+   P and N separately point by point. Check what it did; view; rip up
+   (`route_session_ripup`) and redo it if it is not what a careful designer
+   would draw. On a board with blind or buried
    via types, draw the escapes that need them with `via_span="span"`: the via
    then blocks only the layers it passes, which is what frees the other
    side's via sites. The engine (`route_session_route`) places through vias.
@@ -126,12 +129,23 @@ starting more than two agents, tell the user how many and what for.
   finish (WiFi: 66% at 0.3 mm, 86% at 0.25 mm before anything else changed).
   Narrow only the nets at the fine-pitch part, not the whole board.
 - **A power net drawn as long tracks:** it has no pour or plane; give it one.
-- **Two BGAs back to back on through vias** (memory on both sides): each
-  side's escape vias take the sites the other side needs. Raise it before
-  routing: blind vias (`pcb_add_drill_pair`), one-sided placement, or a
-  looser budget are the user's choice, not a routing problem.
-- **Length budgets** are not Altium rules a script can make: measure them
-  (`analyze_si_pair_skew`, `pcb_read_net_statistics`) after each group.
+- **Two BGAs back to back on through vias** (memory on both sides): it
+  routes. Altium's own DDR4 SODIMM has eight DRAMs back to back and 785
+  through vias, no blind ones. A through via of a net both parts use (the
+  command/address bus, every supply) serves both sides at once, so plan
+  each pair's escape together and share those sites; only the nets one side
+  uses alone (its DQ) need sites of their own. Blind vias make it easier,
+  not possible.
+- **Length budgets** are not Altium rules a script can make: measure them in
+  the session after each group, never with a script of your own:
+  `route_session_lengths(nets, from_ref="X1", to_ref="U1", groups=[{name,
+  nets, target: "<strobe net>", tolerance_mm}], pairs=[[P, N]],
+  layer_scale={"MidLayer2": 1.19})` gives each net pad to pad (vias as the
+  stack depth they cross), each lane member against its strobe, and the
+  pair skew.
+- **Seeing one layer or one corner:** `route_session_view(layers=["MidLayer2"])`
+  or `region_mm=[x1, y1, x2, y2]`. A whole-board picture of eight layers
+  hides exactly the escape you need to see.
 - **Stuck once the rules are right:** the placement is the problem. Say where
   it is congested and move parts (the placement skill) rather than lower the
   rules below the fab's.

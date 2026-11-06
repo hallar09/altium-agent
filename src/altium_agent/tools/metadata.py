@@ -160,7 +160,7 @@ _OFFLINE_SUBSTRINGS = ("_calc_", "calc_", "_compute_", "compute_")
 # editor, so they work with nothing running.
 _OFFLINE_BY_NAME = frozenset({
     # Altium Agent phase (c): files in, JSON out (place_apply is live).
-    "ref_profile", "ref_compare", "place_plan", "place_check",
+    "ref_profile", "ref_compare", "place_plan", "place_check", "pcb_plan_pours",
     # Altium Agent phase (d): the broker's file side (the live ones are
     # route_import_ses and route_set_via_tenting).
     "route_engines", "route_broker_plan", "route_converge", "route_via_style", "route_power_fanout",

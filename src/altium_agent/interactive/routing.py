@@ -39,7 +39,41 @@ def _added(data: dict):
 def _doc(data: dict) -> PcbDocument:
     from ..routing.fanout import with_result
 
-    return with_result(read_pcbdoc(Path(data["source"])), _added(data))
+    doc = read_pcbdoc(Path(data["source"]))
+    if data.get("pours"):
+        from ..routing.pours import apply_to
+
+        doc = apply_to(doc, data["pours"])
+    return with_result(doc, _added(data))
+
+
+def pours(session: str, edge_mm: float = 0.3, island_margin_mm: float = 1.0, ground_every_layer: bool = True,
+          clear: bool = False) -> dict[str, Any]:
+    """Plan the supplies' pours (routing.pours) into the session: from here on
+    the router leaves those nets to their pours, as it does a pour on the
+    board. ``clear`` takes them out again."""
+    from ..routing.pours import plan_pours
+
+    path, data = S.load(session, KIND)
+    if clear:
+        data.pop("pours", None)
+        data["history"].append({"action": "pours cleared", "rebuilt": True})
+        S.save(path, data)
+        return {"cleared": True, "open_connections": sum(_open(_doc(data)).values())}
+    data.pop("pours", None)
+    plan = plan_pours(_doc(data), edge_mm=edge_mm, island_margin_mm=island_margin_mm,
+                      ground_every_layer=ground_every_layer)
+    data["pours"] = plan
+    data["history"].append({"action": "pours", "rebuilt": True})
+    S.save(path, data)
+    from ..routing.fanout import plane_nets
+
+    doc = _doc(data)
+    return {"pours": [{k: p[k] for k in ("net", "layer", "layer_name", "kind")} for p in plan["pours"]],
+            "planes": plan["planes"], "ground": plan["ground"], "notes": plan["notes"],
+            "carried_by_copper_area": sorted(plane_nets(doc)), "open_connections": sum(_open(doc).values()),
+            "next": "route_session_fanout (a via from each of their pads to the pour), then the signals; "
+                    "pcb_apply_pours(board_path, session) makes them in Altium before route_import_ses"}
 
 
 def _rules(doc: PcbDocument) -> dict:
@@ -688,11 +722,15 @@ def export(session: str) -> dict[str, Any]:
     ses = write_ses(res, routing_dir(base) / f"{path.stem}.ses", lm, base.path.stem)
     job = {"source": data["source"], "origin_mil": data["origin_mil"], "ses": str(ses), "layer_map": lm,
            "rules": {**rules, "via_hole_mm": res.rules["via_hole_mm"]}, "route_only": [],
-           "session": str(path)}
+           "session": str(path), "pours": len((data.get("pours") or {}).get("pours") or [])}
     ses.with_suffix(".job.json").write_text(json.dumps(job, indent=1), encoding="utf-8")
     store = get_job_store()
     jid = store.submit("session", lambda: job)
     store.wait(jid, 30)
-    return {"job_id": jid, "ses": str(ses), "tracks": len(res.tracks), "vias": len(res.vias),
-            "next": "route_import_ses(job_id, expect_file) in Altium writes it; then pcb_repour_polygons and "
-                    "pcb_run_drc"}
+    out = {"job_id": jid, "ses": str(ses), "tracks": len(res.tracks), "vias": len(res.vias),
+           "next": "route_import_ses(job_id, expect_file) in Altium writes it; then pcb_repour_polygons and "
+                   "pcb_run_drc"}
+    if data.get("pours"):
+        out["next"] = ("pcb_apply_pours(board_path, session, dry_run=False) FIRST (the routing relies on "
+                       "those pours), then " + out["next"])
+    return out

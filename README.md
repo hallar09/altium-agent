@@ -32,7 +32,7 @@ listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
   auto-shutdown, crash and fault detection). Nothing launches
   `X2.EXE -RScriptingSystem:RunScript` per call, and nothing starts a second
   Altium.
-- **Around 580 tools, grouped by the document they act on**: `app_`, `proj_`,
+- **Around 600 tools, grouped by the document they act on**: `app_`, `proj_`,
   `sch_`, `pcb_`, `lib_`, `obj_`, `route_`, `place_`, `ref_`, `analyze_`,
   `design_`, `audit_`, plus the meta-tools `tool_catalog`, `tool_invoke` and
   `tool_guide`. See [docs/TOOL_NAMING.md](docs/TOOL_NAMING.md) and the

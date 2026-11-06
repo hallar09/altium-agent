@@ -242,6 +242,20 @@ def register_interactive_tools(mcp) -> None:
 
     @mcp.tool()
     @_offline
+    def route_session_pours(session: str, edge_mm: float = 0.3, island_margin_mm: float = 1.0,
+                            ground_every_layer: bool = True, clear: bool = False) -> dict[str, Any]:
+        """Plan the power and ground pours into the session (pcb_plan_pours).
+
+        From then on ground and the supplies are carried by their pours, as
+        a pour on the board would carry them: route_session_fanout drops a
+        via from each of their pads, and route/check stop treating them as
+        tracks to lay. Do it before the power fan-out on a board that has
+        no pours yet. ``clear`` takes them out again. pcb_apply_pours makes
+        them in Altium before route_import_ses."""
+        return R.pours(session, edge_mm, island_margin_mm, ground_every_layer, clear)
+
+    @mcp.tool()
+    @_offline
     def route_session_lengths(session: str, nets: list[str] | None = None, from_ref: str | None = None,
                               to_ref: str | None = None, layer_scale: dict[str, float] | None = None,
                               via_length: bool = True, groups: list[dict] | None = None,

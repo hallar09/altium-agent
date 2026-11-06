@@ -497,6 +497,26 @@ _RECIPES: tuple[dict[str, Any], ...] = (
             "splits per pair before release."),
     },
     {
+        "task": "Pour ground and power planes (pours for the supplies) before routing",
+        "keywords": ("pour", "pours", "plane", "planes", "ground", "gnd", "power", "supply",
+                     "supplies", "flood", "vdd", "vcc", "3v3"),
+        "document_kind": "board",
+        "backends": ("altium",),
+        "use": ["pcb_plan_pours", "route_session_pours", "pcb_apply_pours", "pcb_place_polygon",
+                "pcb_repour_polygons", "pcb_set_plane_net"],
+        "avoid": [
+            ("route_session_route", "a supply with no pour is routed as long tracks; plan the pours first"),
+            ("pcb_place_polygon_rect", "rectangles only; pcb_place_polygon takes any outline"),
+        ],
+        "note": (
+            "pcb_plan_pours(pcb_path) plans them as Altium's example boards do: ground over the whole "
+            "board on every copper layer, a layer named for a supply that supply, other supplies an "
+            "island round their pads on a power layer. In a routing session route_session_pours(session) "
+            "makes the router treat them as poured (fan-out vias, no tracks). In Altium: "
+            "pcb_apply_pours(board_path, session or plan, dry_run=False) (islands first so the big "
+            "pours clear round them), then route_import_ses, then pcb_repour_polygons."),
+    },
+    {
         "task": "Measure net lengths, match a byte lane, check pair skew",
         "keywords": ("length", "lengths", "match", "matching", "skew", "tune", "tuning", "lane",
                      "byte", "ddr", "strobe", "dqs", "flight", "delay", "measure"),

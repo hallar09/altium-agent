@@ -66,18 +66,26 @@ starting more than two agents, tell the user how many and what for.
    rule. You pass the same widths and vias to each route action too.
 
 3. **Power and ground: pours and planes.** Every ground and every supply that
-   feeds more than a couple of pins gets copper area: an inner plane
-   (`pcb_set_plane_net`), or a pour (`pcb_place_polygon_rect`; GND on both
-   outer layers of a 2-layer board). Save. A supply too local for a pour is
-   routed as a track, at its current's width.
+   feeds more than a couple of pins gets copper area, or the router lays it
+   as long tracks. `pcb_plan_pours(pcb_path)` plans them the way Altium's
+   example boards do: ground over the whole board on every copper layer, a
+   layer named for a supply (`int1_power`, `VDD4`) that supply, the other
+   supplies an island round their pads on a power layer. Read the plan; it
+   leaves nets that already have a pour alone. A supply too local for a
+   pour is routed as a track, at its current's width.
 
 4. **Open the session.** `route_session_start(project=<copy>)`: the rules on
    the board, the layers, the pour and plane nets, every net by tier, what is
-   open. `route_session_view` to see it.
+   open. If the board has no pours yet, `route_session_pours(session)` puts
+   the plan in the session, and from then on those nets are carried by their
+   pours. `route_session_view` to see it.
 
 5. **Power and ground first.** `route_session_fanout`: a via beside each power
    and ground pad, on its plane (pads on a layer their net is poured on are
    left to the pour). Pass your via and stub width. Note the `unresolved` pads.
+   When the session's copper goes to Altium, `pcb_apply_pours(board_path,
+   session, dry_run=False)` makes the pours FIRST, then `route_import_ses`,
+   then `pcb_repour_polygons`.
 
 6. **The nets that matter, one at a time.** Differential pairs, RF feeds,
    crystal and clock lines, sense and feedback lines, switch nodes, short

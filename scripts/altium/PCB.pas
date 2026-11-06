@@ -9765,6 +9765,152 @@ Begin
 End;
 
 {..............................................................................}
+{ PCB_PlacePolygon - Drop a copper polygon pour of any outline                 }
+{ Params: points_mm="x,y;x,y;..." ABSOLUTE mm (the Python tool adds the board }
+{ origin), net=<name>, layer=<layer>, pour_over=<bool>.                        }
+{ Only identifiers PCB_PlacePolygonRect and PCB_SetBoardOutline already use.  }
+{..............................................................................}
+Function PCB_PlacePolygon(Params : String; RequestId : String) : String;
+Var
+    Board : IPCB_Board;
+    Polygon : IPCB_Polygon;
+    Pts, Remaining, Pair, VxStr, VyStr : String;
+    SemiPos, CommaPos, N, I : Integer;
+    Xs, Ys : TStringList;
+    NetStr, LayerStr, PourOverStr : String;
+    FoundNet : IPCB_Net;
+    Seg : TPolySegment;
+    TargetLayer : TLayer;
+    NetSet : Boolean;
+Begin
+    Board := GetPCBBoardAnywhere(0);
+    If Board = Nil Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'NO_PCB', 'No PCB document is active');
+        Exit;
+    End;
+
+    Pts := ExtractJsonValue(Params, 'points_mm');
+    NetStr := ExtractJsonValue(Params, 'net');
+    LayerStr := ExtractJsonValue(Params, 'layer');
+    PourOverStr := ExtractJsonValue(Params, 'pour_over');
+    If Pts = '' Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'points_mm is required: "x,y;x,y;..." in mm');
+        Exit;
+    End;
+
+    If LayerStr = '' Then TargetLayer := eTopLayer
+    Else TargetLayer := ResolveLayerId(Board, LayerStr);
+    If TargetLayer = eNoLayer Then
+    Begin
+        Result := BuildErrorResponse(RequestId, 'UNKNOWN_LAYER',
+            'Unknown layer name: ' + LayerStr + '. ' + BoardLayerNamesHint(Board));
+        Exit;
+    End;
+
+    FoundNet := Nil;
+    If NetStr <> '' Then
+    Begin
+        Try FoundNet := FindNetByName(Board, NetStr); Except FoundNet := Nil; End;
+        If FoundNet = Nil Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'UNKNOWN_NET', 'No net named ' + NetStr + ' on the board');
+            Exit;
+        End;
+    End;
+
+    Xs := TStringList.Create;
+    Ys := TStringList.Create;
+    Try
+        Remaining := Pts;
+        While Remaining <> '' Do
+        Begin
+            SemiPos := Pos(';', Remaining);
+            If SemiPos > 0 Then
+            Begin
+                Pair := Copy(Remaining, 1, SemiPos - 1);
+                Remaining := Copy(Remaining, SemiPos + 1, Length(Remaining));
+            End
+            Else
+            Begin
+                Pair := Remaining;
+                Remaining := '';
+            End;
+            If Pair <> '' Then
+            Begin
+                CommaPos := Pos(',', Pair);
+                If CommaPos < 2 Then
+                Begin
+                    Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'Bad vertex "' + Pair + '", expected x,y');
+                    Exit;
+                End;
+                Xs.Add(Copy(Pair, 1, CommaPos - 1));
+                Ys.Add(Copy(Pair, CommaPos + 1, Length(Pair)));
+            End;
+        End;
+
+        N := Xs.Count;
+        If N < 3 Then
+        Begin
+            Result := BuildErrorResponse(RequestId, 'INVALID_PARAMS', 'At least 3 vertices are required');
+            Exit;
+        End;
+
+        NetSet := False;
+        PCBServer.PreProcess;
+        Try
+            Polygon := PCBServer.PCBObjectFactory(ePolyObject, eNoDimension, eCreate_Default);
+            If Polygon = Nil Then
+            Begin
+                Result := BuildErrorResponse(RequestId, 'CREATE_FAILED', 'Failed to create polygon object');
+                Exit;
+            End;
+            Polygon.Layer := TargetLayer;
+            Polygon.PolyHatchStyle := ePolySolid;
+            Polygon.PointCount := N;
+            Seg := TPolySegment;
+            Seg.Kind := ePolySegmentLine;
+            For I := 0 To N - 1 Do
+            Begin
+                VxStr := Xs.Strings[I];
+                VyStr := Ys.Strings[I];
+                Seg.vx := MMToCoord(StrToFloatDef(VxStr, 0));
+                Seg.vy := MMToCoord(StrToFloatDef(VyStr, 0));
+                Polygon.Segments[I] := Seg;
+            End;
+            ClosePolySegments(Polygon, N);
+            If FoundNet <> Nil Then
+            Begin
+                BindPrimitiveToNet(FoundNet, Polygon);
+                NetSet := True;
+            End;
+            If (PourOverStr = '') Or (LowerCase(PourOverStr) = 'true') Then
+                Polygon.PourOver := ePolygonPourOver_SameNet
+            Else
+                Polygon.PourOver := ePolygonPourOver_None;
+            Board.AddPCBObject(Polygon);
+            PCBServer.SendMessageToRobots(Board.I_ObjectAddress, c_Broadcast,
+                PCBM_BoardRegisteration, Polygon.I_ObjectAddress);
+            Polygon.Rebuild;
+        Finally
+            PCBServer.PostProcess;
+        End;
+    Finally
+        Xs.Free;
+        Ys.Free;
+    End;
+
+    MarkDocDirtyByPath(Board.FileName);
+
+    If NetSet Then VxStr := 'true' Else VxStr := 'false';
+    Result := BuildSuccessResponse(RequestId,
+        '{"placed":true,"vertices":' + IntToStr(N) + ','
+        + '"layer":"' + EscapeJsonString(GetLayerString(Polygon.Layer)) + '",'
+        + '"net":"' + EscapeJsonString(NetStr) + '","net_set":' + VxStr + '}');
+End;
+
+{..............................................................................}
 { PCB_PlaceViaArray - Stitch vias in a grid across a rectangle                }
 { Params: x1,y1,x2,y2 in mils, pitch=<mils>, net=<name>, size=<mils>,        }
 {         hole_size=<mils>, low_layer=<layer>, high_layer=<layer>            }
@@ -18586,6 +18732,7 @@ Begin
         'create_primitives_from_board_shape': Result := PCB_CreatePrimitivesFromBoardShape(Params, RequestId);
         'add_board_cutout':        Result := PCB_AddBoardCutout(Params, RequestId);
         'place_polygon_rect':      Result := PCB_PlacePolygonRect(Params, RequestId);
+        'place_polygon':           Result := PCB_PlacePolygon(Params, RequestId);
         'place_via_array':         Result := PCB_PlaceViaArray(Params, RequestId);
         'create_diff_pair':        Result := PCB_CreateDiffPair(Params, RequestId);
         'place_region':            Result := PCB_PlaceRegion(Params, RequestId);

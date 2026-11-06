@@ -4734,6 +4734,152 @@ def register_pcb_tools(mcp):
         return result
 
     @mcp.tool()
+    async def pcb_plan_pours(pcb_path: str, edge_mm: float = 0.3, island_margin_mm: float = 1.0,
+                             ground_every_layer: bool = True) -> dict[str, Any]:
+        """Plan the power and ground pours of a board before routing (offline).
+
+        Without pours the router lays ground and every supply as long
+        tracks. This plans them as the people who laid out Altium's examples
+        did: ground over the whole board on every copper layer; a layer named
+        for a supply ("int1_power", "VDD4", "3V3") that supply over the whole
+        board instead; the other supplies an island round their pads on a
+        power layer; an internal plane layer with no net ground, then the
+        biggest supply. Nets that already have a pour or plane are left alone.
+
+        Nothing is written: route_session_pours puts the plan in a routing
+        session (the router then leaves those nets to their pours), and
+        pcb_apply_pours makes them in Altium.
+
+        Args:
+            pcb_path: The saved .PcbDoc.
+            edge_mm: How far inside the board outline the full pours stop.
+            island_margin_mm: Margin round a supply's pads for its island.
+            ground_every_layer: Ground on every signal layer too (the
+                benchmark boards' habit); False keeps ground to the outer
+                layers and the layers named for it.
+
+        Returns:
+            ``pours`` [{net, layer, layer_name, kind: full|island,
+            outline_mm (from the board origin)}], ``planes``, ``ground``,
+            ``supplies``, ``power_layers`` and ``notes``.
+        """
+        from pathlib import Path
+
+        from ..offline.files.pcbdoc import read_pcbdoc
+        from ..routing.pours import plan_pours
+        try:
+            doc = read_pcbdoc(Path(pcb_path))
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        plan = plan_pours(doc, edge_mm=edge_mm, island_margin_mm=island_margin_mm,
+                          ground_every_layer=ground_every_layer)
+        return {"ok": True, **plan,
+                "next": "route_session_pours(session) to route with them; pcb_apply_pours(board_path) "
+                        "to make them in Altium"}
+
+    @mcp.tool()
+    async def pcb_place_polygon(points_mm: list[Any], layer: str, net: str, board_path: str,
+                                pour_over: bool = True) -> dict[str, Any]:
+        """Drop a copper polygon pour of any outline (pcb_place_polygon_rect
+        only makes rectangles).
+
+        Args:
+            points_mm: Vertices in order, [x, y] or {"x", "y"}, in mm FROM
+                THE BOARD ORIGIN (as pcb_plan_pours and the offline reader
+                give them); the tool adds the origin from the saved board.
+            layer: Copper layer: "TopLayer", "MidLayer1".., "BottomLayer".
+            net: The pour's net (it must exist on the board).
+            board_path: The saved .PcbDoc open in Altium (for its origin).
+            pour_over: Pour over same-net tracks and pads (default True).
+
+        Returns:
+            ``placed``, ``vertices``, ``layer``, ``net``. Repour with
+            pcb_repour_polygons once everything is placed.
+        """
+        from pathlib import Path
+
+        from ..offline.files.pcbdoc import read_pcbdoc
+        from ..units import MM_PER_MIL
+
+        def xy(item: Any) -> tuple[float, float]:
+            if isinstance(item, dict):
+                return float(item["x"]), float(item["y"])
+            return float(item[0]), float(item[1])
+
+        if len(points_mm) < 3:
+            return {"ok": False, "error": "at least 3 points are required"}
+        if not net:
+            return {"ok": False, "error": "a pour needs a net"}
+        try:
+            doc = read_pcbdoc(Path(board_path), primitives=False)
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        ox, oy = (v * MM_PER_MIL for v in doc.origin_mil)
+        pts = ";".join(f"{x + ox:.5f},{y + oy:.5f}" for x, y in (xy(p) for p in points_mm))
+        bridge = get_bridge()
+        return await bridge.send_command_async(
+            "pcb.place_polygon",
+            {"points_mm": pts, "layer": layer, "net": net, "pour_over": "true" if pour_over else "false"})
+
+    @mcp.tool()
+    async def pcb_apply_pours(board_path: str, session: str | None = None, plan: dict | None = None,
+                              dry_run: bool = True) -> dict[str, Any]:
+        """Make a pour plan in Altium: plane nets, then the pours.
+
+        The plan is a routing session's (route_session_pours), one given as
+        ``plan`` (pcb_plan_pours' reply), or, with neither, planned now from
+        the saved board. Islands are made before the full pours, so Altium
+        pours them first and the big pours clear round them. Run it before
+        route_import_ses, then pcb_repour_polygons after the import.
+
+        Args:
+            board_path: The saved .PcbDoc open in Altium.
+            session: A routing session whose pours to make.
+            plan: A plan as pcb_plan_pours returns it.
+            dry_run: True (default) lists what would be made.
+        """
+        from pathlib import Path
+
+        from ..offline.files.pcbdoc import read_pcbdoc
+        from ..routing.pours import plan_pours
+        if session:
+            from ..interactive import session as S
+            _, data = S.load(session, "route")
+            plan = data.get("pours")
+            if not plan:
+                return {"ok": False, "error": "the session has no pours: route_session_pours(session) first"}
+        if plan is None:
+            try:
+                plan = plan_pours(read_pcbdoc(Path(board_path)))
+            except OSError as exc:
+                return {"ok": False, "error": str(exc)}
+        tok = {"TOP": "TopLayer", "BOTTOM": "BottomLayer"}
+
+        def layer_of(p: dict) -> str:
+            lay = str(p["layer"]).upper()
+            return tok.get(lay) or (f"MidLayer{lay[3:]}" if lay.startswith("MID") else p["layer"])
+
+        pours = sorted(plan.get("pours") or [], key=lambda p: (p.get("kind") != "island", -p.get("pour_index", 0)))
+        todo = ([{"tool": "pcb_set_plane_net", "layer": pl["layer"], "net": pl["net"]} for pl in plan.get("planes") or []]
+                + [{"tool": "pcb_place_polygon", "layer": layer_of(p), "net": p["net"], "kind": p.get("kind"),
+                    "vertices": len(p["outline_mm"])} for p in pours])
+        if dry_run:
+            return {"ok": True, "dry_run": True, "would_make": todo,
+                    "next": "pcb_apply_pours(..., dry_run=False), then route_import_ses, then pcb_repour_polygons"}
+        done = []
+        for pl in plan.get("planes") or []:
+            r = await pcb_set_plane_net(pl["layer"], pl["net"])
+            done.append({"plane": pl["layer"], "net": pl["net"], "ok": bool(isinstance(r, dict) and r.get("success"))})
+        for p in pours:
+            r = await pcb_place_polygon(p["outline_mm"], layer_of(p), p["net"], board_path)
+            done.append({"pour": layer_of(p), "net": p["net"], "kind": p.get("kind"),
+                         "ok": bool(isinstance(r, dict) and r.get("placed")),
+                         **({} if isinstance(r, dict) and r.get("placed") else {"reply": r})})
+        failed = [d for d in done if not d["ok"]]
+        return {"ok": not failed, "made": len(done) - len(failed), "failed": failed, "items": done,
+                "next": "route_import_ses (if routing), then pcb_repour_polygons and app_save_all"}
+
+    @mcp.tool()
     async def pcb_place_via_array(
         x1: int,
         y1: int,

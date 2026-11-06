@@ -192,8 +192,13 @@ def _width_rules(lb, nets: list[str], width_mm: float | None, via_d: float | Non
 
 
 def route(session: str, nets: list[str], width_mm: float | None = None, via_diameter_mm: float | None = None,
-          via_hole_mm: float | None = None) -> dict[str, Any]:
-    """The in-house engine routes ``nets``; everything else stays as it is."""
+          via_hole_mm: float | None = None, blind_vias: bool = True) -> dict[str, Any]:
+    """The in-house engine routes ``nets``; everything else stays as it is.
+
+    With via types (route_session_via_types, or drill pairs on the board)
+    and ``blind_vias``, each via it places is shrunk to the shortest pair
+    spanning what its net uses there, and the nets still open get one more
+    try in the room that frees."""
     from ..layout.route.router import route_adaptive
     from .board_model import layout_board, legacy_id
 
@@ -206,18 +211,152 @@ def route(session: str, nets: list[str], width_mm: float | None = None, via_diam
     bad = [n for n in nets if n not in known]
     if bad:
         raise InvalidArgument(f"not nets of this board: {', '.join(bad[:10])}")
-    lb = layout_board(doc)
-    _width_rules(lb, nets, width_mm, via_diameter_mm, via_hole_mm)
-    r = route_adaptive(lb, nets=frozenset(nets))
-    out = r.apply(pours=False)
-    mm = 1 / 39.37007874
-    tracks = [{"net": t.net, "layer": legacy_id(t.layer), "x1": t.x1 * mm, "y1": t.y1 * mm, "x2": t.x2 * mm,
+    pairs = _pairs(data) if blind_vias else []
+
+    def once(doc, which):
+        lb = layout_board(doc)
+        _width_rules(lb, which, width_mm, via_diameter_mm, via_hole_mm)
+        r = route_adaptive(lb, nets=frozenset(which))
+        out = r.apply(pours=False)
+        mm = 1 / 39.37007874
+        tr = [{"net": t.net, "layer": legacy_id(t.layer), "x1": t.x1 * mm, "y1": t.y1 * mm, "x2": t.x2 * mm,
                "y2": t.y2 * mm, "width": t.width * mm}
               for t in out.tracks[len(lb.tracks):] if legacy_id(t.layer) and t.net]
-    vias = [{"net": v.net, "x": v.x * mm, "y": v.y * mm, "diameter": v.diameter * mm, "hole": v.hole * mm}
-            for v in out.vias[len(lb.vias):] if v.net]
+        vi = [{"net": v.net, "x": v.x * mm, "y": v.y * mm, "diameter": v.diameter * mm, "hole": v.hole * mm}
+              for v in out.vias[len(lb.vias):] if v.net]
+        return tr, vi
+
+    tracks, vias = once(doc, nets)
+    shrunk = 0
+    retried: list[str] = []
+    if pairs:
+        shrunk = shrink_spans(doc, tracks, vias, pairs)
+        if shrunk:
+            from ..routing.fanout import FanoutResult, with_result
+
+            after = with_result(doc, FanoutResult(tracks=tracks, vias=vias))
+            still = _open(after)
+            retried = [n for n in nets if n in still]
+            if retried:
+                # the shrunk vias freed the layers they no longer pass: the nets
+                # that failed get one more try in that room
+                keep_t = [t for t in tracks if t["net"] not in retried]
+                keep_v = [v for v in vias if v["net"] not in retried]
+                base = with_result(doc, FanoutResult(tracks=keep_t, vias=keep_v))
+                t2, v2 = once(base, retried)
+                shrunk += shrink_spans(base, t2, v2, pairs)
+                tracks, vias = keep_t + t2, keep_v + v2
     _record(path, data, f"route {','.join(nets[:6])}{'...' if len(nets) > 6 else ''}", tracks, vias)
-    return {"nets": nets, **_report(_doc(data), set(nets), tracks, vias)}
+    out = {"nets": nets, **_report(_doc(data), set(nets), tracks, vias)}
+    if pairs:
+        out["blind_or_buried"] = {"vias_shrunk": shrunk, "retried": retried}
+        out.update(_span_notes(data, vias))
+    return out
+
+
+def _pairs(data: dict) -> list[tuple[int, int]]:
+    """The session's via types: what route_session_via_types set, else the board's drill pairs."""
+    if data.get("drill_pairs") is not None:
+        return [tuple(p) for p in data["drill_pairs"]]
+    return sorted(drill_pairs(data["source"]))
+
+
+def shrink_spans(doc: PcbDocument, tracks: list[dict], vias: list[dict], pairs) -> int:
+    """Turn each through via in ``vias`` into the shortest drill pair that
+    spans what its net uses there: the layers of its tracks that end on it,
+    the pad it sits in, and (for a poured or plane net) a layer carrying the
+    net at that spot. Returns how many changed. Edits ``vias`` in place."""
+    from ..bench.connectivity import _poly_layer, copper_order, legacy_of
+    from ..placement.shape import inside
+    from ..routing.fanout import best_span
+
+    order = copper_order(doc) or [1, 32]
+    pours: dict[str, list] = {}
+    for p in doc.polygons or []:
+        lid = _poly_layer(p.get("layer", ""))
+        if p.get("net") and lid and len(p.get("outline_mm") or []) >= 3 and not p.get("shelved"):
+            pours.setdefault(p["net"], []).append((lid, [tuple(q) for q in p["outline_mm"]]))
+    planes: dict[str, list[int]] = {}
+    for s in doc.stack:
+        if s.kind == "plane":
+            n = doc.board.get(f"PLANE{s.layer_id & 0xFFFF}NETNAME", "").strip()
+            lid = legacy_of(s.layer_id)
+            if n and n != "(No Net)" and lid is not None:
+                planes.setdefault(n, []).append(lid)
+    by_net: dict[str, list] = {}
+    for t in tracks:
+        by_net.setdefault(t["net"], []).append(t)
+    pads_by_net: dict[str, list] = {}
+    for p in doc.pads:
+        if 0 <= p.net < len(doc.nets):
+            pads_by_net.setdefault(doc.nets[p.net], []).append(p)
+    changed = 0
+    for v in vias:
+        if "layer_start" in v:
+            continue
+        r = v["diameter"] / 2 + 1e-3
+        need: set[int] = set()
+        through = False
+        for t in by_net.get(v["net"], ()):
+            if any(math.hypot(x - v["x"], y - v["y"]) <= r for x, y in ((t["x1"], t["y1"]), (t["x2"], t["y2"]))):
+                need.add(int(t["layer"]))
+        for p in pads_by_net.get(v["net"], ()):
+            if abs(p.x - v["x"]) <= p.size_x / 2 + r and abs(p.y - v["y"]) <= p.size_y / 2 + r:
+                if p.hole > 0 or p.layer == 74:
+                    through = True
+                else:
+                    need.add(p.layer)
+        if through or not need:
+            continue
+        cands = [None]
+        area = [lid for lid in planes.get(v["net"], ())] + [lid for lid, o in pours.get(v["net"], ())
+                                                            if inside(o, v["x"], v["y"])]
+        if area:
+            cands = area
+        best = None
+        for extra in cands:
+            s = best_span(order, pairs, need | ({extra} if extra is not None else set()))
+            if s is not None:
+                w = abs(order.index(s[1]) - order.index(s[0]))
+                if best is None or w < best[0]:
+                    best = (w, s)
+        if best is None and len(need) == 1 and not area:
+            continue                     # a via joining nothing but one layer: leave it be
+        if best is not None:
+            v["layer_start"], v["layer_end"] = best[1]
+            changed += 1
+    return changed
+
+
+def via_types(session: str, pairs: list[list[str]] | None = None, clear: bool = False) -> dict[str, Any]:
+    """Set the blind and buried via types this session may use (by layer
+    name), before they are on the board; ``clear`` goes back to the board's."""
+    from .board_model import layer_token, legacy_id
+
+    path, data = S.load(session, KIND)
+    if clear:
+        data.pop("drill_pairs", None)
+    elif pairs is not None:
+        out = []
+        for p in pairs:
+            if len(p) != 2:
+                raise InvalidArgument("each pair is [low_layer, high_layer], e.g. ['TopLayer', 'MidLayer1']")
+            a, b = legacy_id(str(p[0])), legacy_id(str(p[1]))
+            if a is None or b is None:
+                raise InvalidArgument(f"{p}: name copper layers (TopLayer, MidLayerN, BottomLayer)")
+            out.append(sorted((a, b)))
+        data["drill_pairs"] = out
+    S.save(path, data)
+    have = drill_pairs(data["source"])
+    use = _pairs(data)
+    missing = [(lo, hi) for lo, hi in use if (lo, hi) not in have and (hi, lo) not in have]
+    return {"via_types": [f"{layer_token(lo)}-{layer_token(hi)}" for lo, hi in use],
+            "on_the_board": [f"{layer_token(lo)}-{layer_token(hi)}" for lo, hi in sorted(have)],
+            "add_before_import": [{"tool": "pcb_add_drill_pair",
+                                   "arguments": {"low_layer": layer_token(lo), "high_layer": layer_token(hi)}}
+                                  for lo, hi in missing],
+            "used_by": "route_session_fanout (each power pad's via to its pour) and route_session_route "
+                       "(each via shrunk to what its net uses there, then the failed nets once more)"}
 
 
 def drill_pairs(pcb_path: str) -> set[tuple[int, int]]:
@@ -462,7 +601,7 @@ def lengths(session: str, nets: list[str] | None = None, from_ref: str | None = 
 
 def fanout(session: str, nets: list[str] | None = None, stitch_spacing_mm: float | None = None,
            via_diameter_mm: float | None = None, via_hole_mm: float | None = None,
-           stub_width_mm: float | None = None) -> dict[str, Any]:
+           stub_width_mm: float | None = None, blind_vias: bool = True) -> dict[str, Any]:
     """Power and ground pads to their planes (routing.fanout); with
     ``stitch_spacing_mm``, stitching between their pours instead."""
     from ..routing.fanout import plan_fanout, plan_stitching
@@ -474,10 +613,13 @@ def fanout(session: str, nets: list[str] | None = None, stitch_spacing_mm: float
         res = plan_stitching(doc, nets, spacing_mm=stitch_spacing_mm, **kw)
         action = "stitch"
     else:
-        res = plan_fanout(doc, nets, stub_width_mm=stub_width_mm, **kw)
+        res = plan_fanout(doc, nets, stub_width_mm=stub_width_mm,
+                          drill_pairs=_pairs(data) if blind_vias else None, **kw)
         action = "fanout"
     _record(path, data, action, res.tracks, res.vias)
-    return {"action": action, **res.summary(), **_report(_doc(data), set(res.nets), res.tracks, res.vias)}
+    out = {"action": action, **res.summary(), **_report(_doc(data), set(res.nets), res.tracks, res.vias)}
+    out.update(_span_notes(data, res.vias))
+    return out
 
 
 def check(session: str, nets: list[str] | None = None, detail: str = "summary") -> dict[str, Any]:

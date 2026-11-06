@@ -113,7 +113,7 @@ def register_interactive_tools(mcp) -> None:
     @_offline
     def route_session_route(session: str, nets: list[str], width_mm: float | None = None,
                             via_diameter_mm: float | None = None,
-                            via_hole_mm: float | None = None) -> dict[str, Any]:
+                            via_hole_mm: float | None = None, blind_vias: bool = True) -> dict[str, Any]:
         """Route these nets with the in-house engine; everything else stays.
 
         You choose the nets and their order (critical first, a few at a time)
@@ -122,7 +122,7 @@ def register_interactive_tools(mcp) -> None:
         still open, and the clearance violations on them. Rip up and route
         again (other order, other width) when a result is poor.
         """
-        return R.route(session, nets, width_mm, via_diameter_mm, via_hole_mm)
+        return R.route(session, nets, width_mm, via_diameter_mm, via_hole_mm, blind_vias)
 
     @mcp.tool()
     @_offline
@@ -154,14 +154,14 @@ def register_interactive_tools(mcp) -> None:
     @_offline
     def route_session_fanout(session: str, nets: list[str] | None = None, stitch_spacing_mm: float | None = None,
                              via_diameter_mm: float | None = None, via_hole_mm: float | None = None,
-                             stub_width_mm: float | None = None) -> dict[str, Any]:
+                             stub_width_mm: float | None = None, blind_vias: bool = True) -> dict[str, Any]:
         """Power and ground pads to their planes, with short vias.
 
         Do it before the bulk of the signals. With stitch_spacing_mm (after
         the signals): stitching vias between the net's pours on different
         layers instead. Pads it cannot reach are listed, never forced.
         """
-        return R.fanout(session, nets, stitch_spacing_mm, via_diameter_mm, via_hole_mm, stub_width_mm)
+        return R.fanout(session, nets, stitch_spacing_mm, via_diameter_mm, via_hole_mm, stub_width_mm, blind_vias)
 
     @mcp.tool()
     @_offline
@@ -239,6 +239,24 @@ def register_interactive_tools(mcp) -> None:
                 escape, one byte lane) instead of the whole board.
         """
         return R.view(session, nets, side, layers, region_mm)
+
+    @mcp.tool()
+    @_offline
+    def route_session_via_types(session: str, pairs: list[list[str]] | None = None,
+                                clear: bool = False) -> dict[str, Any]:
+        """The blind and buried via types this session may use.
+
+        With drill pairs (the board's, or ``pairs`` set here before they are
+        on the board, e.g. [["TopLayer", "MidLayer1"], ["MidLayer6",
+        "BottomLayer"]]), route_session_fanout gives each power and ground pad
+        a via of the shortest pair that reaches its pour, and
+        route_session_route shrinks each via it places to the shortest pair
+        spanning what its net uses there, then tries the nets still open once
+        more. A blind via blocks only its own layers, so under BGAs on both
+        sides the inner layers stay free. ``clear`` goes back to the board's
+        pairs. The reply lists the pcb_add_drill_pair calls still needed
+        before route_import_ses."""
+        return R.via_types(session, pairs, clear)
 
     @mcp.tool()
     @_offline

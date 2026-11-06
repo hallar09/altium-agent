@@ -97,9 +97,13 @@ starting more than two agents, tell the user how many and what for.
    P and N separately point by point. Check what it did; view; rip up
    (`route_session_ripup`) and redo it if it is not what a careful designer
    would draw. On a board with blind or buried
-   via types, draw the escapes that need them with `via_span="span"`: the via
-   then blocks only the layers it passes, which is what frees the other
-   side's via sites. The engine (`route_session_route`) places through vias.
+   via types (drill pairs, or `route_session_via_types` before they exist),
+   the fan-out and the engine use them themselves: each power pad's via is the
+   shortest pair that reaches its pour, and each via `route_session_route`
+   lays is shrunk to the shortest pair spanning what its net uses there, then
+   the nets still open get one more try. A blind via blocks only the layers
+   it passes, which is what frees the other side's via sites. Draw an escape
+   by hand with `via_span="span"` where you want a particular span.
 
 7. **The rest, a few nets at a time.** `route_session_route(nets=[...])`, 5 to 10
    nets per call, local and short ones first, then by block, then the long
@@ -120,9 +124,9 @@ starting more than two agents, tell the user how many and what for.
    `route_import_ses(job_id, expect_file)`, `pcb_repour_polygons`,
    `pcb_run_drc(..., board_path=<PcbDoc>)` (without the path a second DRC
    can silently re-read the last report). Blind and buried vias come
-   through the import with their layers when they were drawn with
-   `route_session_draw(via_span="span")`; make each via type first with
-   `pcb_add_drill_pair` (the draw reply names any that is missing).
+   through the import with their layers (drawn, fanned out or shrunk); make
+   each via type first with `pcb_add_drill_pair` (the replies and
+   `route_session_via_types` name any that is missing).
    Fix what Altium's DRC finds (it is the final word), in a new session if
    needed, and save.
 

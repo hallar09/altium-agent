@@ -108,6 +108,40 @@ class _Disc:
     x: float
     y: float
     r: float
+    layers: frozenset | None = None     # a blind or buried via's copper layers; None: all
+
+
+def _layers_of(it):
+    """The copper layers an obstacle is on: a set, or None for all of them."""
+    spans = getattr(it, "layers", None)
+    if spans is not None:
+        return spans
+    lay = getattr(it, "layer", ALL)
+    return None if lay == ALL else frozenset((lay,))
+
+
+def span_layers(order: list[int], lo: int, hi: int) -> frozenset:
+    """The layers (legacy ids, in ``order``) a via from ``lo`` to ``hi`` passes."""
+    if lo not in order or hi not in order:
+        return frozenset(order)
+    i, j = sorted((order.index(lo), order.index(hi)))
+    return frozenset(order[i:j + 1])
+
+
+def best_span(order: list[int], pairs, need: set[int]) -> tuple[int, int] | None:
+    """The drill pair with the fewest layers that spans every layer in
+    ``need`` (legacy ids); None when only a through via does."""
+    best = None
+    for lo, hi in pairs or ():
+        if lo not in order or hi not in order:
+            continue
+        i, j = sorted((order.index(lo), order.index(hi)))
+        if i == 0 and j == len(order) - 1:
+            continue                     # that is a through via
+        if all(n in order and i <= order.index(n) <= j for n in need):
+            if best is None or j - i < best[0]:
+                best = (j - i, order[i], order[j])
+    return (best[1], best[2]) if best else None
 
 
 @dataclass
@@ -121,6 +155,7 @@ class FanoutResult:
     already: int = 0
     on_pour: int = 0
     through_hole: int = 0
+    blind: int = 0
     unresolved: list[dict] = field(default_factory=list)
     nets: list[str] = field(default_factory=list)
     rules: dict = field(default_factory=dict)
@@ -129,7 +164,8 @@ class FanoutResult:
         return {"nets": self.nets, "pads_needing_a_via": self.needed, "vias_placed": self.placed,
                 "vias_shared": self.reused, "stubs_into_a_pour": self.to_pour,
                 "joined_by_a_pour_on_their_layer": self.on_pour,
-                "through_hole_pads": self.through_hole, "unresolved": len(self.unresolved),
+                "through_hole_pads": self.through_hole, "blind_or_buried_placed": self.blind,
+                "unresolved": len(self.unresolved),
                 "unresolved_pads": self.unresolved[:40], "rules": self.rules}
 
 
@@ -197,8 +233,13 @@ def _obstacles(doc: PcbDocument) -> _Index:
             layer = ALL if a.layer == KEEPOUT_LAYER else a.layer
             for (x1, y1), (x2, y2) in _chords(a.cx, a.cy, a.radius, a.start_angle, a.end_angle):
                 put(_Seg(net(a.net) if a.layer != KEEPOUT_LAYER else "", layer, x1, y1, x2, y2, a.width))
+    from ..bench.connectivity import copper_order
+
+    order = copper_order(doc) or [1, 32]
     for v in doc.vias:
-        put(_Disc(net(v.net), v.x, v.y, v.diameter / 2))
+        lo, hi = v.layer_start, v.layer_end
+        layers = None if (lo, hi) in ((1, 32), (32, 1)) else span_layers(order, lo, hi)
+        put(_Disc(net(v.net), v.x, v.y, v.diameter / 2, layers))
     for f in doc.fills:
         if 1 <= f.layer <= 32:
             hw, hh = abs(f.x2 - f.x1) / 2, abs(f.y2 - f.y1) / 2
@@ -233,15 +274,18 @@ def _gap_seg(s: _Seg, it) -> float:
     return dist_point_seg(it.x, it.y, s.x1, s.y1, s.x2, s.y2) - s.width / 2 - it.r
 
 
-def _clear(idx: _Index, shape, gap, clearance: float, layer: int | None) -> bool:
+def _clear(idx: _Index, shape, gap, clearance: float, layer) -> bool:
     """No copper of another net within ``clearance`` of ``shape`` (on
-    ``layer``, or on any layer when None: a through via)."""
+    ``layer``; a set of layers for a blind or buried via; on any layer when
+    None: a through via)."""
     x0, y0, x1, y1 = _bbox(shape)
+    mine = None if layer is None else (frozenset(layer) if isinstance(layer, (set, frozenset)) else
+                                       frozenset((layer,)))
     for it in idx.near(x0 - clearance, y0 - clearance, x1 + clearance, y1 + clearance):
         if it.net and it.net == shape.net:
             continue
-        lay = getattr(it, "layer", ALL)
-        if layer is not None and lay not in (ALL, layer):
+        theirs = _layers_of(it)
+        if mine is not None and theirs is not None and not (mine & theirs):
             continue
         if gap(shape, it) < clearance - 1e-6:
             return False
@@ -274,13 +318,31 @@ def _into_pour(outline: list, x: float, y: float, depth: float) -> tuple[float, 
 
 def plan_fanout(doc: PcbDocument, nets: list[str] | None = None, *, via_diameter_mm: float | None = None,
                 via_hole_mm: float | None = None, stub_width_mm: float | None = None,
-                clearance_mm: float | None = None, max_reach_mm: float = MAX_REACH_MM) -> FanoutResult:
+                clearance_mm: float | None = None, max_reach_mm: float = MAX_REACH_MM,
+                drill_pairs=None) -> FanoutResult:
     """The vias and stubs that join each power and ground pad to its plane.
 
     ``nets`` defaults to every net carried by a pour or an internal plane.
     Rules default to the board's (RoutingVias, Width, Clearance, the outline
     clearance), as the DSN export reads them.
+
+    ``drill_pairs`` [(low, high) legacy ids]: the board's blind and buried
+    via types. A pad whose plane or pour is on a layer a pair reaches gets
+    a via of the shortest such pair, from its own layer to that one, and
+    keeps clear of other copper on those layers only: under a BGA the
+    layers below stay free for signals (the via sites a SODIMM's DRAMs on
+    both sides fight over).
     """
+    from ..bench.connectivity import copper_order, legacy_of
+
+    order = copper_order(doc) or [1, 32]
+    plane_layer: dict[str, list[int]] = defaultdict(list)
+    for s in doc.stack:
+        if s.kind == "plane":
+            n = doc.board.get(f"PLANE{s.layer_id & 0xFFFF}NETNAME", "").strip()
+            lid = legacy_of(s.layer_id)
+            if n and n != "(No Net)" and lid is not None:
+                plane_layer[n].append(lid)
     from .specctra import _rule_defaults
 
     rules = _rule_defaults(doc)
@@ -316,7 +378,10 @@ def plan_fanout(doc: PcbDocument, nets: list[str] | None = None, *, via_diameter
     same_vias: dict[str, list[_Disc]] = defaultdict(list)
     for v in doc.vias:
         if v.net != NONE16:
-            same_vias[doc.net_name(v.net)].append(_Disc(doc.net_name(v.net), v.x, v.y, v.diameter / 2))
+            through = (v.layer_start, v.layer_end) in ((1, 32), (32, 1))
+            same_vias[doc.net_name(v.net)].append(_Disc(doc.net_name(v.net), v.x, v.y, v.diameter / 2,
+                                                        None if through else
+                                                        span_layers(order, v.layer_start, v.layer_end)))
     refs = {c.index: c.designator for c in doc.components}
 
     def lands(net: str, x: float, y: float, pad_layer: int) -> bool:
@@ -329,6 +394,22 @@ def plan_fanout(doc: PcbDocument, nets: list[str] | None = None, *, via_diameter
         if len(poly) < 3:
             return True
         return inside(poly, x, y) and distance_to_edge(poly, x, y) >= edge_clr + r
+
+    def span_for(net: str, x: float, y: float, pad_layer: int):
+        """(layer_start, layer_end, layers) of the shortest drill pair from
+        the pad's layer to a layer carrying ``net`` here; None: through."""
+        if not drill_pairs:
+            return None
+        best = None
+        targets = list(plane_layer.get(net, ())) + [lid for lid, outline in pours.get(net, ())
+                                                     if lid != pad_layer and inside(outline, x, y)]
+        for t in targets:
+            s = best_span(order, drill_pairs, {pad_layer, t})
+            if s is not None:
+                layers = span_layers(order, *s)
+                if best is None or len(layers) < len(best[2]):
+                    best = (s[0], s[1], layers)
+        return best
 
     r_via = via_d / 2
     pads = sorted((p for p in doc.pads if p.net != NONE16 and doc.net_name(p.net) in want),
@@ -366,6 +447,11 @@ def plan_fanout(doc: PcbDocument, nets: list[str] | None = None, *, via_diameter
                     best = (q[2], None, stub, "pour")
         # A same-net via already within reach: a stub to it is enough.
         for v in same_vias.get(net, ()):
+            if v.layers is not None and (p.layer not in v.layers or not (
+                    set(plane_layer.get(net, ())) & v.layers
+                    or any(lid in v.layers and lid != p.layer and inside(o, v.x, v.y)
+                           for lid, o in pours.get(net, ())))):
+                continue                 # a blind via that does not join this pad to its copper
             d = math.hypot(v.x - p.x, v.y - p.y)
             if d - r_via - max(hw, hh) <= max_reach_mm:
                 stub = _Seg(net, p.layer, p.x, p.y, v.x, v.y, width)
@@ -388,10 +474,11 @@ def plan_fanout(doc: PcbDocument, nets: list[str] | None = None, *, via_diameter
         # A stub into the pour, then a shared via, before a new one: a via
         # costs more than a slightly longer stub.
         for d, x, y in ([] if best is not None else cands):
-            via = _Disc(net, x, y, r_via)
             if not (on_board(x, y, r_via) and lands(net, x, y, p.layer)):
                 continue
-            if not _clear(idx, via, _gap_disc, clr, None):
+            span = span_for(net, x, y, p.layer)
+            via = _Disc(net, x, y, r_via, span[2] if span else None)
+            if not _clear(idx, via, _gap_disc, clr, span[2] if span else None):
                 continue
             stub = _Seg(net, p.layer, p.x, p.y, x, y, width)
             if not _clear(idx, stub, _gap_seg, clr, p.layer):
@@ -413,7 +500,13 @@ def plan_fanout(doc: PcbDocument, nets: list[str] | None = None, *, via_diameter
         elif shared:
             res.reused += 1
         else:
-            res.vias.append({"net": net, "x": via.x, "y": via.y, "diameter": via_d, "hole": via_h})
+            row = {"net": net, "x": via.x, "y": via.y, "diameter": via_d, "hole": via_h}
+            if via.layers is not None:
+                lo, hi = sorted((min(via.layers, key=order.index), max(via.layers, key=order.index)),
+                                key=order.index)
+                row.update(layer_start=lo, layer_end=hi)
+                res.blind += 1
+            res.vias.append(row)
             idx.add(via, *_bbox(via))
             same_vias[net].append(via)
             res.placed += 1

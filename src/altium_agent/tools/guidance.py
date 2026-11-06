@@ -477,13 +477,18 @@ _RECIPES: tuple[dict[str, Any], ...] = (
                      "span", "layerpairs", "hdi"),
         "document_kind": "board",
         "backends": ("altium",),
-        "use": ["pcb_add_drill_pair", "pcb_get_drill_pairs", "route_session_draw", "pcb_place_vias",
-                "pcb_place_via", "pcb_create_design_rule"],
+        "use": ["pcb_add_drill_pair", "pcb_get_drill_pairs", "route_session_via_types", "route_session_fanout",
+                "route_session_route", "route_session_draw", "pcb_place_vias", "pcb_place_via",
+                "pcb_create_design_rule"],
         "avoid": [
-            ("route_session_route", "the engine places THROUGH vias only; draw blind or buried "
-                                    "escapes with route_session_draw(via_span='span')"),
+            ("pcb_place_via_array", "through vias on a grid; blind ones come from the session or "
+                                    "pcb_place_vias with low_layer/high_layer"),
         ],
         "note": (
+            "In a routing session, route_session_via_types(session, pairs=[['TopLayer','MidLayer1'], "
+            "['MidLayer6','BottomLayer']]) (or the board's drill pairs) makes route_session_fanout give "
+            "each power pad the shortest pair that reaches its pour, and route_session_route shrink each "
+            "via it lays to the shortest pair its net uses there, then retry what is still open. "
             "1) pcb_add_drill_pair(low_layer='TopLayer', high_layer='MidLayer2') per span (it "
             "places and deletes a parked via; Altium keeps the pair; placing any via with a new "
             "span does the same), save, pcb_get_drill_pairs. 2) In a routing session, "

@@ -275,5 +275,5 @@ def levers_from_profile(profile: dict) -> dict:
     dec = (profile.get("decoupling") or {}).get("distance_mm") or {}
     if dec.get("median") is not None:
         # a reference with caps right at the pins pulls them harder
-        lev["decap_weight"] = 3.0 if dec["median"] <= 1.5 else 1.5 if dec["median"] <= 4 else 1.0
+        lev["decap_weight"] = 6.0 if dec["median"] <= 1.5 else 4.0 if dec["median"] <= 4 else 2.0
     return lev

@@ -54,8 +54,10 @@ there to give you a first draft to refine, never the answer.
    so tight a track cannot pass. `place_session_undo` when a move made things worse.
 
 6. **Tidy.** Align rows of passives, turn polarised parts the same way,
-   keep the designators readable. The bottom side only when the top is full,
-   and only for passives and flat parts.
+   keep the designators readable. Use the bottom side when the top is full:
+   passives first (decoupling caps right under their IC's pins), then flat
+   SMD parts. `place_plan` does this itself (`bottom="auto"`); pass
+   `bottom="none"` only if the board must be assembled on one side.
 
 7. **Check.** `place_session_check`: no errors, decoupling within its limit
    (default 3 mm), connectors at the edge, nothing off the board. Explain any

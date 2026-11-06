@@ -103,7 +103,10 @@ def register_house_style_tools(mcp) -> None:
             project: The .PrjPcb (or the active project).
             pcb: A .PcbDoc instead of the project's first.
             levers: Placer settings, lengths in mm: spacing_mm,
-                edge_gap_mm, escape, bottom ("none"/"passives"/"all"),
+                edge_gap_mm, escape, bottom ("auto" default: passives
+                underneath once one side would be over half full, every
+                SMD part once over 85%; "none" keeps all on top;
+                "passives"; "all"),
                 body ("full"/"copper"), density, effort (0..1), seed,
                 decap_weight, fixed [{ref, x_mm, y_mm, rotation, side}],
                 keep [refs] (exact designators: a name not on the board is

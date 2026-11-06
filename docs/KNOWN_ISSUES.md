@@ -100,8 +100,25 @@ board. Items marked **open** are not handled yet.
   takes about 7 s at `effort` 0.1 and 17 s at 0.5. **Open**: at those efforts
   one or two of Kame's large ICs stay unplaced inside the original outline;
   `place_check` reports them and `place_apply` refuses the plan.
-- **Decoupling distance is a pull, not a guarantee.** `place_check` flags caps
-  beyond the profile's p90 (or 3 mm); raise `decap_weight` and re-plan.
+- **Both sides by default.** `bottom` defaults to `auto`: passives go
+  underneath once the parts would cover over half of one side, every SMD
+  part once over 85%. Kept on top only, the benchmark boards (whose people
+  put 50-60% of the parts underneath) had to fit 0.73-1.0 of the board on
+  one side, and Kame ended with 67 overlapping pairs. Pass `bottom: "none"`
+  for one-sided assembly; the plan's `levers.bottom_used` and notes say
+  what `auto` chose.
+- **Decoupling distance is a pull plus a pass, not a guarantee.** After the
+  anneal every decoupling cap moves to the nearest legal spot by its IC's
+  supply pin, or trades places with a part of its size there. Caps are
+  shared out across the ICs on their net and never aimed at a connector
+  (a card edge's VDD fingers had pulled every SODIMM cap to the edge, and a
+  tie had sent all of them to U1 of eight DRAMs). `place_check` still flags
+  caps beyond the profile's p90 (or 3 mm); on a full board some stay far.
+- **No routability estimate.** A RUDY congestion map and an escape-via
+  count were tried and dropped: on the benchmark they scored our failing
+  placements as less congested than the people's, and the person's SODIMM
+  (back-to-back DRAMs, through vias only) the same as ours. The trial route
+  (`altium_agent.bench`) is the measure.
 - **`place_apply` is `live_unverified`** until step A13 records it.
   `pcb.import_placement` sets absolute mils; the tool refuses a focused board
   that is not the plan's, or whose origin moved since planning.

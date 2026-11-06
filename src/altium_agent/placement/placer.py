@@ -42,6 +42,24 @@ from .shape import (
 )
 
 EDGE_KINDS = ("left", "right", "top", "bottom", "any", "corner", "none")
+BOTTOM_KINDS = ("auto", "none", "passives", "all")
+
+#: bottom="auto": the share of the board the bodies (with spacing) would
+#: cover on one side, above which the passives go to the bottom too, and
+#: above which every SMD part may. Set on the benchmark boards, where the
+#: people who laid them out put 50-60% of the parts underneath and a
+#: one-sided placement could not fit (tests/test_placement_uses_both_sides.py).
+AUTO_PASSIVES_AT = 0.5
+AUTO_ALL_AT = 0.85
+
+
+def auto_bottom(density_one_side: float) -> str:
+    """The ``bottom`` lever ``auto`` stands for at this one-sided density."""
+    if density_one_side > AUTO_ALL_AT:
+        return "all"
+    if density_one_side > AUTO_PASSIVES_AT:
+        return "passives"
+    return "none"
 
 
 @dataclass
@@ -55,7 +73,7 @@ class Levers:
     edge_gap: float = 1.0               # bodies keep this far from the edge, mm
     spacing: float = 0.5                # gap between bodies, mm
     escape: float = 1.0                 # extra room round many-pin parts (multiplier)
-    bottom: str = "none"                # none | passives | all
+    bottom: str = "auto"                # auto | none | passives | all (auto: by how full one side is)
     fixed: list[dict] = field(default_factory=list)   # {ref, x_mm, y_mm, rotation?, side?}
     edges: list[dict] = field(default_factory=list)   # {ref, edge}
     keep: list[str] = field(default_factory=list)     # parts that stay where they are
@@ -65,7 +83,7 @@ class Levers:
     shape: dict = field(default_factory=lambda: {"kind": "rect"})
     scale: float = 1.0
     heights: str = "enforce"            # enforce | report
-    decap_weight: float = 1.5           # pull of a decoupling cap to its IC's supply pin
+    decap_weight: float = 4.0           # pull of a decoupling cap to its IC's supply pin (4: best on the benchmark)
     body: str = "full"                  # full (pads, silk, courtyard) | copper (pads only)
 
     def to_dict(self) -> dict:
@@ -106,7 +124,7 @@ def sanitize_levers(raw: dict | None) -> dict:
     shape = sanitize_shape(raw.get("shape"))
     if shape:
         out["shape"] = shape
-    if raw.get("bottom") in ("none", "passives", "all"):
+    if raw.get("bottom") in BOTTOM_KINDS:
         out["bottom"] = raw["bottom"]
     if raw.get("body") in ("full", "copper"):
         out["body"] = raw["body"]
@@ -320,6 +338,9 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
                          + ", ".join(f"{f.ref} {f.height:.2f} mm" for f in tall))
 
     ants = {r.upper(): k for r, k in (antennas or {}).items()}
+    # "auto" is settled once the board's area is known; until then one side
+    bottom = "none" if L.bottom == "auto" else L.bottom
+    one_side: set[int] = set()
     parts: list[_Part] = []
     if L.body == "copper":
         # Altium Agent: space parts by copper; silkscreen and courtyards may overlap, as on dense boards
@@ -339,7 +360,8 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
         too_tall = bool(limits) and L.heights != "report" and (f.height or 0) > limits["bottom"] + 1e-6
         if too_tall or ak:
             sides = [0]
-        elif L.bottom == "all" and not f.through_hole or L.bottom == "passives" and is_passive(f):
+            one_side.add(len(parts))
+        elif bottom == "all" and not f.through_hole or bottom == "passives" and is_passive(f):
             sides = [0, 1]
         else:
             sides = [0]
@@ -374,6 +396,7 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
         n.weight = 0.08 if n.supply else 0.6 if len(n.pins) > 8 else 1.0
     real_nets = len(nets)
     ic_pins: dict[str, list] = {}
+    claimed: dict[tuple[int, str], int] = {}
     decaps = 0
     for i, p in enumerate(parts):
         if not re.match(r"^C\d", p.f.ref, re.IGNORECASE) or len(p.f.pins) != 2:
@@ -392,12 +415,18 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
         counts: dict[int, int] = {}
         for q in n.pins:
             counts[q[0]] = counts.get(q[0], 0) + 1
-        best, best_count = -1, 0
+        best, best_count = -1, -math.inf
         for part, c in counts.items():
-            if len(parts[part].f.pins) >= 8 and c > best_count:
-                best, best_count = part, c
+            # an IC, never a connector: a card edge has more VDD fingers than any
+            # DRAM has balls, and pulled every cap on the SODIMM to the fingers.
+            # Shared out by the supply pins each IC still has without a cap: on a
+            # tie the first IC took them all (every cap round U1 of eight DRAMs).
+            free_pins = c - claimed.get((part, net), 0)
+            if len(parts[part].f.pins) >= 8 and not is_connector(parts[part].f) and free_pins > best_count:
+                best, best_count = part, free_pins
         if best < 0:
             continue
+        claimed[(best, net)] = claimed.get((best, net), 0) + 1
         key = f"{best}:{net}"
         lst = ic_pins.get(key) or [q for q in n.pins if q[0] == best]
         ic_pins[key] = lst[1:] + lst[:1]
@@ -418,7 +447,7 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
     # ---- the board
     body_area = sum((p.boxes[0][2] - p.boxes[0][0] + 2 * p.margin) * (p.boxes[0][3] - p.boxes[0][1] + 2 * p.margin)
                     for p in parts)
-    share = 1 if L.bottom == "none" else 0.8 if L.bottom == "passives" else 0.6
+    share = 1 if bottom == "none" else 0.8 if bottom == "passives" else 0.6
     W, H = L.width or 0, L.height or 0
     biggest = max([1.0] + [max(p.boxes[0][2] - p.boxes[0][0], p.boxes[0][3] - p.boxes[0][1]) for p in parts])
     wanted = body_area * share / min(0.7, max(0.08, L.density))
@@ -458,6 +487,16 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
             p.f = replace(p.f, at=replace(p.f.at, x=p.f.at.x - shift[0], y=p.f.at.y - shift[1]))
         fixed_by = {k: {**v, "x": v["x"] - shift[0], "y": v["y"] - shift[1]} for k, v in fixed_by.items()}
     W, H = outline.width, outline.height
+    if L.bottom == "auto" and outline.area:
+        one = body_area / outline.area
+        bottom = auto_bottom(one)
+        if bottom != "none":
+            for i, p in enumerate(parts):
+                if i not in one_side and (bottom == "all" and not p.f.through_hole
+                                          or bottom == "passives" and is_passive(p.f)):
+                    p.sides = [0, 1]
+            notes.append(f"bottom side: {bottom} (the parts would cover {one:.0%} of the board on one side; "
+                         "levers bottom='none' keeps them all on top)")
     R = outline.corner_radius
     region = (L.edge_gap, L.edge_gap, W - L.edge_gap, H - L.edge_gap)
     corner_inset = R * (1 - math.sqrt(0.5)) if outline.rect and R > 0 else 0
@@ -869,6 +908,101 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
             p.x, p.y, p.o = best if best else home
             sync(i)
     slide_antennas()
+
+    # ---- decoupling caps: each to the nearest free spot by its IC's supply pin.
+    # The anneal pulls them there, but against everything else; on the
+    # benchmark boards half ended over 3 mm away. Only legal spots are taken.
+    decap_of = [(nets[k].pins[0], nets[k].pins[1]) for k in range(real_nets, len(nets))
+                if nets[k].name.startswith("decap ")]
+
+    def gap_to(cap: tuple[int, int], ic: tuple[int, int]) -> float:
+        cx, cy = pin_at(parts[cap[0]], cap[1])
+        ix, iy = pin_at(parts[ic[0]], ic[1])
+        return math.hypot(cx - ix, cy - iy)
+
+    moved_caps = 0
+    for cap, ic in sorted(decap_of, key=lambda d: -gap_to(*d)):
+        i = cap[0]
+        p = parts[i]
+        if not p.movable or i in first_placed or not free(i):
+            continue
+        now = gap_to(cap, ic)
+        if now <= 1.0:
+            continue
+        tx, ty = pin_at(parts[ic[0]], ic[1])
+        home = (p.x, p.y, p.o)
+        orients = [orient_index(k, s) for s in p.sides for k in range(4)]
+        best = None
+        r = 0.0
+        while r < now - 0.3 and best is None:
+            for x, y in _ring_points(tx, ty, r, 0.3):
+                for o in orients:
+                    off = p.pins[o][cap[1]]
+                    p.x, p.y, p.o = x - off[0], y - off[1], o
+                    sync(i)
+                    if not free(i):
+                        continue
+                    c = sum(nets[k].weight * net_len(nets[k]) for k in p.nets)
+                    if best is None or c < best[0]:
+                        best = (c, p.x, p.y, p.o)
+            r += 0.3
+        if best:
+            _, p.x, p.y, p.o = best
+            moved_caps += 1
+            sync(i)
+            continue
+        p.x, p.y, p.o = home
+        sync(i)
+        # no free spot: trade places with a part of about its size by the pin
+        # (on a full board the termination resistors take every spot first)
+        a_cap = area(p)
+        cands = []
+        for j in movable:
+            q = parts[j]
+            if j == i or j in first_placed or q.o < 0 or not (0.6 * a_cap <= area(q) <= 1.7 * a_cap):
+                continue
+            if any(j == c[0] for c, _ in decap_of):
+                continue
+            bq = bbox(q)
+            dq = math.hypot((bq[0] + bq[2]) / 2 - tx, (bq[1] + bq[3]) / 2 - ty)
+            if dq < now - 1.0:
+                cands.append((dq, j))
+        for _, j in sorted(cands)[:8]:
+            q = parts[j]
+            shared = set(p.nets) & set(q.nets)
+            before = local_cost(i, 50, 50) + local_cost(j, 50, 50, shared)
+            ph, qh = (p.x, p.y, p.o), (q.x, q.y, q.o)
+            pc = ((bbox(p)[0] + bbox(p)[2]) / 2 - p.x, (bbox(p)[1] + bbox(p)[3]) / 2 - p.y)
+            qc = ((bbox(q)[0] + bbox(q)[2]) / 2 - q.x, (bbox(q)[1] + bbox(q)[3]) / 2 - q.y)
+            pcx, pcy = ph[0] + pc[0], ph[1] + pc[1]
+            qcx, qcy = qh[0] + qc[0], qh[1] + qc[1]
+            done = None
+            for so in [orient_index(k, s) for s in p.sides for k in range(4)]:
+                b = p.boxes[so]
+                p.x, p.y, p.o = qcx - (b[0] + b[2]) / 2, qcy - (b[1] + b[3]) / 2, so
+                sync(i)
+                for qo in [orient_index(k, s) for s in q.sides for k in range(4)]:
+                    bb = q.boxes[qo]
+                    q.x, q.y, q.o = pcx - (bb[0] + bb[2]) / 2, pcy - (bb[1] + bb[3]) / 2, qo
+                    sync(j)
+                    if not (free(i) and free(j)):
+                        continue
+                    after = local_cost(i, 50, 50) + local_cost(j, 50, 50, shared)
+                    if after < before - 1e-6 and gap_to(cap, ic) < now - 0.5 and (done is None or after < done[0]):
+                        done = (after, p.x, p.y, p.o, q.x, q.y, q.o)
+            if done:
+                _, p.x, p.y, p.o, q.x, q.y, q.o = done
+                sync(i)
+                sync(j)
+                moved_caps += 1
+                break
+            p.x, p.y, p.o = ph
+            q.x, q.y, q.o = qh
+            sync(i)
+            sync(j)
+    if moved_caps:
+        notes.append(f"{moved_caps} decoupling cap(s) moved next to their IC's supply pin")
+
     for i in first_placed + order:
         if not free(i):
             unplaced.append(parts[i].f.ref)
@@ -928,7 +1062,7 @@ def place_board(parts_in: list[Footprint], levers: dict | None = None, *,
             "longest": sorted(lens, key=lambda d: -d["length_mm"])[:5],
             "bottom_parts": sum(1 for pl in placements if pl["side"] == "bottom"),
         },
-        "levers": L.to_dict(), "iterations": iterations, "notes": notes,
+        "levers": {**L.to_dict(), "bottom_used": bottom}, "iterations": iterations, "notes": notes,
     }
 
 

@@ -76,7 +76,7 @@ By default the server advertises every tool (the `full` toolset), so an
 agent never has to go looking for one through `tool_invoke`. All of them
 together are about 150k tokens of schemas; if your client pays for that on
 every turn, `--toolset core` (or `ALTIUM_AGENT_TOOLSET=core`) advertises
-only the ~100 tools a design run uses and keeps the rest reachable through
+only the core set a design run uses (about a sixth of them) and keeps the rest reachable through
 `tool_catalog` and `tool_invoke`, with the same schemas and validation. `design_get_discipline` returns one section at a time.
 Long design chats grow expensive: the session journal survives a new
 chat, so start one per stage with `design_session_resume`.
@@ -132,7 +132,7 @@ or the equivalent entry under `mcpServers` in Claude's configuration:
 ```
 
 `ALTIUM_AGENT_TOOLSET` in `env` picks what is advertised: `full` (the
-default, all ~600 tools), `core` (the ~100 a design run uses), or `minimal` (only `tool_catalog` and
+default, all ~600 tools), `core` (the set a design run uses), or `minimal` (only `tool_catalog` and
 `tool_invoke`, for clients that cap tool count). Every advertised tool
 carries MCP `readOnlyHint` / `destructiveHint` annotations derived from its
 interaction badge. `ALTIUM_AGENT_DISABLE_DASHBOARD=1` skips the
